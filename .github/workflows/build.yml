@@ -1,0 +1,49 @@
+name: Build PKG
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Portable code tests (DEF / SFF / content scanner, with sanitizers)
+        run: sh tests/run.sh
+
+      - name: Real-asset sprite decoding tests (Ikemen GO default content)
+        run: |
+          git clone --depth 1 https://github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack ../screenpack
+          sh tests/run_real.sh ../screenpack
+
+  pkg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get the PS3 toolchain Dockerfile
+        uses: actions/checkout@v4
+        with:
+          repository: ps3dev/ps3dev-docker
+          path: ps3dev-docker
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build toolchain image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: ps3dev-docker
+          load: true
+          tags: ps3dev-docker
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build the package
+        run: docker run --rm -v "$PWD":/build -w /build ps3dev-docker sh -c "make clean && make pkg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ikemen-ps3-pkg
+          path: "*.pkg"

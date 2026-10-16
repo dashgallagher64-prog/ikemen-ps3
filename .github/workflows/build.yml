@@ -10,8 +10,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Portable code tests
+      - name: Portable code tests (DEF / SFF / content scanner, with sanitizers)
         run: sh tests/run.sh
+
+      - name: Real-asset sprite decoding tests (Ikemen GO default content)
+        run: |
+          git clone --depth 1 https://github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack ../screenpack
+          sh tests/run_real.sh ../screenpack
 
   pkg:
     runs-on: ubuntu-latest
@@ -25,6 +30,7 @@ jobs:
             libncurses5-dev patch python3 python-is-python3 wget zlib1g-dev libtool-bin \
             python3-dev bzip2 libgmp3-dev pkg-config libssl-dev
 
+      # The ps3dev project publishes a ready-made compiler + PSL1GHT (nothing to compile here).
       - name: Download pre-built PS3 toolchain + PSL1GHT
         env:
           GH_TOKEN: ${{ github.token }}
@@ -32,7 +38,8 @@ jobs:
           url=$(gh api "repos/ps3dev/ps3dev/releases?per_page=30" --jq '[.[] | select(.draft | not) | .assets[] | select(.name == "ps3dev-linux-X64.tar.gz")] | sort_by(.created_at) | reverse | .[0].browser_download_url')
           echo "Using: $url"
           if [ -z "$url" ] || [ "$url" = "null" ]; then
-            echo "No ps3dev-linux-X64.tar.gz asset found."
+            echo "No ps3dev-linux-X64.tar.gz asset found. Recent assets:"
+            gh api "repos/ps3dev/ps3dev/releases?per_page=5" --jq '.[] | .tag_name + ": " + ([.assets[].name] | join(", "))'
             exit 1
           fi
           curl -fsSL "$url" | tar xz -C "$HOME"
@@ -46,6 +53,15 @@ jobs:
         run: |
           ppu-gcc --version | head -1
           test -f "$PSL1GHT/ppu_rules" && echo "PSL1GHT found"
+
+      - name: Show repo layout (for debugging)
+        run: |
+          pwd
+          ls -la
+          echo "--- Makefile (first lines):"
+          head -20 Makefile
+          echo "--- sources:"
+          ls source include pkgfiles 2>&1
 
       - name: Build the package
         run: make pkg

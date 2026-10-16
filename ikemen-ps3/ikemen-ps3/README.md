@@ -50,7 +50,7 @@ Controls: D-pad up/down move, X confirm, O back, L1/R1 cycle screenpack, PS butt
 | SFF v1: PCX decode, shared palettes, linked sprites | **done, verified on real files** |
 | SFF v2: raw 8-bit, RLE8, RLE5, LZ5, palettes, linked sprites | **done, verified on real files** (RLE5 not seen in the sample set) |
 | Single-sprite loading (`sff_load_ex`) for fast select-screen previews | done, tested |
-| SFF v2 PNG sprites (formats 10/11/12) and raw 24/32-bit | **not yet** (needs an inflate; ~half of HD/modern content uses these) |
+| SFF v2 PNG sprites (formats 10/11/12) and raw 24/32-bit | **done, verified on real files** (kfm.sff's 120x140 PNG portrait decodes pixel-perfectly via our own inflate) |
 | Menu: char -> stage -> ready, with portrait (9000,0) and standing sprite (0,0) | done; logic run on the host with a fake pad |
 | RSX framebuffer, pad, sysutil exit | written against PSL1GHT headers, **never run on a PS3** |
 | Makefile / pkg build | modeled on the PSL1GHT samples; **never run with the real toolchain** |
@@ -65,6 +65,7 @@ Expect to fix small things on first build, and tell me what breaks.
 ## Tests
 
     sh tests/run.sh                          # DEF / SFF probe / content scanner on a fake tree
+    sh tests/run_png.sh                       # PNG round-trip: encode with Python's zlib, decode with us, byte-compare
     sh tests/run_real.sh <screenpack repo>   # decode real SFFs (needs a checkout of
                                              #   github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack)
     sh tests/run_ui.sh <content root> <out> [keys]   # run the real menu on the host, dump screenshots
@@ -73,7 +74,7 @@ Sprite-format reference tools: `tests/sff_dump.c` (stats + contact sheet), `test
 
 ## Roadmap
 
-1. SFF v2 PNG sprites (small inflate + PNG unfilter; formats 10/11/12)
+1. ~~SFF v2 PNG sprites (small inflate + PNG unfilter; formats 10/11/12)~~ - done
 2. AIR parser + animation player
 3. CMD/CNS/ST parsing and the trigger/state-controller VM (the big part)
 4. Collision, hitdefs, projectiles, helpers

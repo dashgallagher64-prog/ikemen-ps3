@@ -42,13 +42,24 @@ enum {
     SPR_NOT_LOADED        /* skipped by a filtered load: not an error */
 };
 
+/* Pixel layout of Sprite.px. Lets the same blitter draw classic 8-bit indexed
+ * sprites (PAL8, palette from Sff.pal) and full-color PNG sprites (RGB24/RGBA32,
+ * no palette). PAL8 keeps index 0 = transparent; RGBA32 treats alpha < 128 as
+ * transparent; RGB24 is fully opaque. */
+enum {
+    SPR_MODE_PAL8   = 0,   /* px = w*h indices into Sff.pal[sp->pal] (the original SFF path) */
+    SPR_MODE_RGB24  = 1,   /* px = w*h*3 bytes, packed R,G,B per pixel; pal = -1 */
+    SPR_MODE_RGBA32 = 2,   /* px = w*h*4 bytes, packed R,G,B,A per pixel; pal = -1 */
+};
+
 typedef struct {
     uint16_t group, image;
     int16_t  ax, ay;      /* axis (hotspot) */
     uint16_t w, h;
-    uint8_t *px;          /* w*h indices; NULL if err or not decoded */
-    int      pal;         /* index into Sff.pal, -1 = none */
+    uint8_t *px;          /* pixel data; size depends on mode (see above). NULL if err/not decoded */
+    int      pal;         /* index into Sff.pal, -1 = none (RGB24/RGBA32 always set this to -1) */
     int      owns;        /* 1 if px must be freed (0 = shared with a linked sprite) */
+    int      mode;        /* SPR_MODE_* */
     int      err;         /* SPR_* */
 } Sprite;
 
@@ -71,9 +82,29 @@ int            sff_load_ex(const char *path, Sff *out, int group, int image);
 /* Copy one decoded sprite + its palette out so the Sff can be freed. 0 = ok. */
 int            sff_extract(const Sff *s, int group, int image, Sprite *out, uint32_t pal_out[256]);
 void           sprite_free(Sprite *sp);
-/* Draw so the sprite's axis lands on (x,y). Integer scale >= 1, optional horizontal flip. Clips. */
+/* Draw so the sprite's axis lands on (x,y). Integer scale >= 1, optional horizontal flip. Clips.
+ * Handles PAL8 (palette lookup, index 0 = transparent), RGB24 (opaque) and RGBA32
+ * (alpha < 128 = transparent). For non-PAL8 modes `pal` may be NULL. */
 void           sprite_blit(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
                            int x, int y, int scale, int flip);
+
+/* ----------------------------------------------------------- png decode */
+/* Decode a single PNG stream (signature through IEND) into pixel data.
+ * `data`/`len` point at the start of the PNG signature (NOT the SFF 4-byte size
+ * prefix - sprite.c skips that). w/h are the dimensions from the SFF sprite
+ * header and are checked against the PNG IHDR.
+ *
+ * On success: *out_px is a malloc'd buffer (caller frees) of
+ *   w*h bytes (mode=PAL8), w*h*3 bytes (RGB24) or w*h*4 bytes (RGBA32);
+ *   *out_mode is one of SPR_MODE_*; for PAL8, pal_out is filled with up to 256
+ *   entries in 0xFFRRGGBB form (missing entries are 0 = transparent).
+ *
+ * Returns a SPR_* code. Only bit depth 8 is supported for color types 2/4/6,
+ * and depths 1/2/4/8 for color type 3 (indexed). Adam7 interlacing is rejected
+ * with SPR_ERR_UNSUPPORTED (rare in SFF content). */
+int            png_decode(const uint8_t *data, size_t len,
+                          int w, int h,
+                          uint8_t **out_px, int *out_mode, uint32_t pal_out[256]);
 
 /* ---------------------------------------------------------------- content */
 typedef struct {

@@ -155,6 +155,7 @@ static void share(Sprite *dst, const Sprite *src)
 {
     dst->w = src->w; dst->h = src->h;
     dst->px = src->px; dst->owns = 0;
+    dst->mode = src->mode;
     if (dst->pal < 0) dst->pal = src->pal;
     dst->err = src->err;
 }
@@ -348,11 +349,30 @@ static int load_v2(Sff *s, const uint8_t *b, size_t len, int wg, int wi)
         size_t total = (size_t)w * ht;
         const uint8_t *src = b + ofs;
         uint8_t *px = NULL;
+        int mode = SPR_MODE_PAL8;                        /* default for all classic formats */
+        int pal_override = -1;                           /* for PNG PAL8: which palette we created */
 
         if (fmt == 0) {
-            if (depth != 8) { sp->err = SPR_ERR_UNSUPPORTED; continue; }
-            px = calloc(total, 1);
-            if (px) memcpy(px, src, size < total ? size : total);
+            if (depth == 8) {
+                px = calloc(total, 1);
+                if (px) memcpy(px, src, size < total ? size : total);
+            } else if (depth == 24) {
+                /* raw 24-bit RGB pixels; size should be w*h*3 */
+                size_t need_bytes = total * 3;
+                if (size < need_bytes) { sp->err = SPR_ERR_TRUNC; continue; }
+                px = malloc(need_bytes);
+                if (px) { memcpy(px, src, need_bytes); mode = SPR_MODE_RGB24; }
+                else { sp->err = SPR_ERR_NOMEM; continue; }
+            } else if (depth == 32) {
+                /* raw 32-bit RGBA pixels; size should be w*h*4 */
+                size_t need_bytes = total * 4;
+                if (size < need_bytes) { sp->err = SPR_ERR_TRUNC; continue; }
+                px = malloc(need_bytes);
+                if (px) { memcpy(px, src, need_bytes); mode = SPR_MODE_RGBA32; }
+                else { sp->err = SPR_ERR_NOMEM; continue; }
+            } else {
+                sp->err = SPR_ERR_UNSUPPORTED; continue;
+            }
         } else if (fmt >= 2 && fmt <= 4) {
             if (size < 4) { sp->err = SPR_ERR_TRUNC; continue; }
             px = calloc(total, 1);
@@ -361,12 +381,32 @@ static int load_v2(Sff *s, const uint8_t *b, size_t len, int wg, int wi)
                 else if (fmt == 3) dec_rle5(src + 4, size - 4, px, total);
                 else dec_lz5(src + 4, size - 4, px, total);
             }
+        } else if (fmt == 10 || fmt == 11 || fmt == 12) {
+            /* SFF v2 PNG sprite: 4-byte LE size prefix + a complete PNG stream.
+             * Hand off to png_dec.c which decodes via our own inflate. */
+            if (size < 4) { sp->err = SPR_ERR_TRUNC; continue; }
+            int png_mode = SPR_MODE_PAL8;
+            uint8_t *png_px = NULL;
+            uint32_t png_pal[256];
+            int prc = png_decode(src + 4, size - 4, w, ht, &png_px, &png_mode, png_pal);
+            if (prc != SPR_OK) { sp->err = prc; continue; }
+            px = png_px; mode = png_mode;
+            if (png_mode == SPR_MODE_PAL8) {
+                /* Register the PNG's palette as a new SFF palette so the rest of
+                 * the loader (and sff_palette) finds it normally. */
+                int pi = pal_new(s);
+                if (pi < 0) { free(px); sp->err = SPR_ERR_NOMEM; continue; }
+                memcpy(s->pal[pi], png_pal, sizeof png_pal);
+                pal_override = pi;
+            }
         } else {
-            sp->err = SPR_ERR_UNSUPPORTED;     /* 10/11/12 = PNG: needs zlib/libpng */
+            sp->err = SPR_ERR_UNSUPPORTED;     /* 1 (7-zip), 5..9 unused, 13+ reserved */
             continue;
         }
         if (!px) { sp->err = SPR_ERR_NOMEM; continue; }
         sp->w = (uint16_t)w; sp->h = (uint16_t)ht; sp->px = px; sp->owns = 1;
+        sp->mode = mode;
+        if (pal_override >= 0) sp->pal = pal_override;
     }
     free(need);
     return 0;
@@ -426,12 +466,14 @@ int sff_extract(const Sff *s, int group, int image, Sprite *out, uint32_t pal_ou
     const Sprite *sp = sff_find(s, group, image);
     if (!sp || sp->err || !sp->px) return -1;
     const uint32_t *pal = sff_palette(s, sp);
-    if (!pal) return -2;
-    size_t n = (size_t)sp->w * sp->h;
+    if (!pal && sp->mode == SPR_MODE_PAL8) return -2;   /* PAL8 needs a palette */
+    /* bytes per pixel in the source image */
+    int bpp = (sp->mode == SPR_MODE_PAL8) ? 1 : (sp->mode == SPR_MODE_RGB24) ? 3 : 4;
+    size_t n = (size_t)sp->w * sp->h * bpp;
     uint8_t *px = malloc(n);
     if (!px) return -3;
     memcpy(px, sp->px, n);
-    memcpy(pal_out, pal, 256 * sizeof(uint32_t));
+    if (pal && pal_out) memcpy(pal_out, pal, 256 * sizeof(uint32_t));
     *out = *sp;
     out->px = px; out->owns = 1; out->pal = 0;
     return 0;
@@ -446,13 +488,31 @@ void sprite_free(Sprite *sp)
 void sprite_blit(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
                  int x, int y, int scale, int flip)
 {
-    if (!sp || !sp->px || !pal || scale < 1) return;
+    if (!sp || !sp->px || scale < 1) return;
+    /* PAL8 mode needs a palette; RGB24/RGBA32 carry their own colours and
+     * ignore `pal` entirely. */
+    int mode = sp->mode;
+    if (mode == SPR_MODE_PAL8 && !pal) return;
+    int bpp = (mode == SPR_MODE_PAL8) ? 1 : (mode == SPR_MODE_RGB24) ? 3 : 4;
     int left = flip ? x - (sp->w - sp->ax) * scale : x - sp->ax * scale;
     int top  = y - sp->ay * scale;
     for (int sy = 0; sy < sp->h; sy++) {
         for (int sx = 0; sx < sp->w; sx++) {
-            uint8_t idx = sp->px[(size_t)sy * sp->w + sx];
-            if (!idx) continue;                               /* index 0 = transparent */
+            const uint8_t *p = sp->px + ((size_t)sy * sp->w + sx) * bpp;
+            uint32_t col;
+            int transparent = 0;
+            if (mode == SPR_MODE_PAL8) {
+                uint8_t idx = p[0];
+                if (!idx) { transparent = 1; }              /* index 0 = transparent */
+                else col = pal[idx];
+            } else if (mode == SPR_MODE_RGB24) {
+                col = 0xFF000000u | ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+            } else { /* SPR_MODE_RGBA32 */
+                uint8_t a = p[3];
+                if (a < 128) { transparent = 1; }           /* alpha < 128 = transparent */
+                else col = 0xFF000000u | ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+            }
+            if (transparent) continue;
             int px0 = left + (flip ? sp->w - 1 - sx : sx) * scale;
             int py0 = top + sy * scale;
             for (int j = 0; j < scale; j++) {
@@ -460,7 +520,7 @@ void sprite_blit(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, i
                 if (yy < 0 || yy >= dh) continue;
                 for (int i = 0; i < scale; i++) {
                     int xx = px0 + i;
-                    if (xx >= 0 && xx < dw) dst[(size_t)yy * dw + xx] = pal[idx];
+                    if (xx >= 0 && xx < dw) dst[(size_t)yy * dw + xx] = col;
                 }
             }
         }

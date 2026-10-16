@@ -6,8 +6,10 @@ set -e
 cd "$(dirname "$0")/.."
 R=${1:?usage: sh tests/run_real.sh <screenpack checkout>}
 T=$(mktemp -d)
-gcc -Wall -Wextra -O1 -g -Iinclude -fsanitize=address,undefined -o "$T/sff_dump" tests/sff_dump.c source/sprite.c
-gcc -Wall -Wextra -O1 -g -Iinclude -fsanitize=address,undefined -o "$T/sff_filter_test" tests/sff_filter_test.c source/sprite.c
+gcc -Wall -Wextra -O1 -g -Iinclude -fsanitize=address,undefined -o "$T/sff_dump" \
+    tests/sff_dump.c source/sprite.c source/png_dec.c source/inflate.c
+gcc -Wall -Wextra -O1 -g -Iinclude -fsanitize=address,undefined -o "$T/sff_filter_test" \
+    tests/sff_filter_test.c source/sprite.c source/png_dec.c source/inflate.c
 
 expect() {
     out=$("$T/sff_dump" "$R/$1" | head -1)
@@ -16,8 +18,8 @@ expect() {
         *) echo "FAIL  $1"; echo "  want: $2"; echo "  got:  $out"; rm -rf "$T"; exit 1 ;;
     esac
 }
-# v2: LZ5 + one PNG sprite (PNG is not implemented yet, so exactly 1 unsupported)
-expect chars/kfm/kfm.sff     "v2 sprites=281 palettes=16 ok=280 trunc=0 format=0 unsupported=1"
+# v2: LZ5 + one PNG sprite (PNG now supported via source/png_dec.c + source/inflate.c)
+expect chars/kfm/kfm.sff     "v2 sprites=281 palettes=17 ok=281 trunc=0 format=0 unsupported=0"
 # v1: PCX with shared palettes
 expect chars/kfm/intro.sff   "v1 sprites=12 palettes=2 ok=12 trunc=0 format=0 unsupported=0 badlink=0"
 expect chars/kfm/ending.sff  "v1 sprites=7 palettes=1 ok=7"

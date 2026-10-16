@@ -18,8 +18,11 @@ int main(int argc, char **argv)
             if (sff_load_ex(argv[a], &part, f->group, f->image)) { bad++; continue; }
             const Sprite *p = sff_find(&part, f->group, f->image);
             const uint32_t *pf = sff_palette(&full, f), *pp = p ? sff_palette(&part, p) : NULL;
-            int same = p && !p->err && p->w == f->w && p->h == f->h && pf && pp &&
-                       !memcmp(p->px, f->px, (size_t)f->w * f->h) && !memcmp(pf, pp, 1024);
+            int bpp = (f->mode == SPR_MODE_PAL8) ? 1 : (f->mode == SPR_MODE_RGB24) ? 3 : 4;
+            int same = p && !p->err && p->w == f->w && p->h == f->h && p->mode == f->mode &&
+                       !memcmp(p->px, f->px, (size_t)f->w * f->h * bpp) &&
+                       (f->mode != SPR_MODE_PAL8 ||
+                        (pf && pp && !memcmp(pf, pp, 1024)));
             checked++;
             if (!same) { bad++; printf("%s: MISMATCH g=%u i=%u (err=%d)\n", argv[a], f->group, f->image, p ? p->err : -1); }
             /* a filtered load must not decode unrelated sprites */

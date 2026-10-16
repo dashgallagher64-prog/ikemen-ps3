@@ -45,6 +45,10 @@ CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
+ifeq ($(strip $(CFILES) $(CPPFILES)),)
+$(error No .c files found in '$(SOURCES)/'. The source/ folder is missing from the repo; upload the folders source/, include/ and pkgfiles/ too)
+endif
+
 ifeq ($(strip $(CPPFILES)),)
 	export LD	:=	$(CC)
 else

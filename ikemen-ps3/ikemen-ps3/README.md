@@ -9,17 +9,22 @@ reference; the sprite decoders here were checked against its `src/image.go`.
 
     ./build.sh
 
-Needs only Docker. The first run builds the PS3 toolchain image from
-[ps3dev/ps3dev-docker](https://github.com/ps3dev/ps3dev-docker); that compiles gcc for the
-Cell CPU and takes a long time (30-90+ min). Docker caches it, so later builds take seconds.
+Needs only Docker. The image downloads the project's **pre-built** compiler + PSL1GHT from
+[ps3dev/ps3dev releases](https://github.com/ps3dev/ps3dev/releases) (~170 MB), so nothing is
+compiled and the first run takes a few minutes.
 Output: `ikemen-ps3.pkg` (and `ikemen-ps3.gnpdrm.pkg`).
 
-**No Docker?** Push this folder to a GitHub repo. `.github/workflows/build.yml` builds the
-package on every push and attaches it as the `ikemen-ps3-pkg` artifact (Actions tab). It also
-runs the host tests.
+**No Docker?** Push this folder to a GitHub repo. `.github/workflows/build.yml` downloads the same
+pre-built toolchain, builds the package on every push and attaches it as the `ikemen-ps3-pkg`
+artifact (Actions tab). It also runs the host tests.
 
-**Own toolchain?** With [ps3toolchain](https://github.com/ps3dev/ps3toolchain) + PSL1GHT
-installed and `PS3DEV` / `PSL1GHT` exported: `make pkg`.
+**Own toolchain?** Install the ps3dev release (or build it from
+[ps3dev/ps3dev](https://github.com/ps3dev/ps3dev)), export `PS3DEV` / `PSL1GHT` and add
+`$PS3DEV/bin`, `$PS3DEV/ppu/bin` to `PATH`, then `make pkg`. (`tools/fetch-ps3dev.sh` downloads
+the release for you.)
+
+Note: `ps3toolchain` alone only builds the compiler. PSL1GHT now comes from `ps3dev/ps3dev`, so
+don't build with the old `ps3dev-docker` image; it lacks PSL1GHT.
 
 ## Install & add content
 

@@ -12,7 +12,7 @@ endif
 
 include $(PSL1GHT)/ppu_rules
 
-TARGET		:=	$(notdir $(CURDIR))
+TARGET		:=	ikemen-ps3
 BUILD		:=	build
 SOURCES		:=	source
 INCLUDES	:=	include
@@ -33,7 +33,7 @@ LIBS		:=	-lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm
 LIBDIRS		:=
 
 #---------------------------------------------------------------------------------
-ifneq ($(BUILD),$(notdir $(CURDIR)))
+ifneq ($(INNER),1)   # outer make; the inner one (INNER=1) runs inside build/
 #---------------------------------------------------------------------------------
 
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
@@ -44,6 +44,15 @@ export BUILDDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+
+ifeq ($(strip $(CFILES) $(CPPFILES)),)
+$(error No .c files found in '$(SOURCES)/'. The source/ folder is missing from the repo; upload the folders source/, include/ and pkgfiles/ too)
+endif
+
+$(info Source files: $(CFILES) $(CPPFILES))
+ifeq ($(shell grep -l 'int main' $(SOURCES)/*.c 2>/dev/null),)
+$(error No main() found in $(SOURCES)/*.c. source/main.c is missing or empty in the repo. Re-upload it from the zip)
+endif
 
 ifeq ($(strip $(CPPFILES)),)
 	export LD	:=	$(CC)
@@ -65,7 +74,7 @@ export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile INNER=1
 
 clean:
 	@echo clean ...

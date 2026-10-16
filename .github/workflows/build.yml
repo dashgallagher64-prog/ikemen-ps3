@@ -30,6 +30,16 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: sh tests/run.sh
 
+      - name: PNG round-trip tests (encode with Python's zlib, decode with our inflate + PNG decoder)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: sh tests/run_png.sh
+
+      - name: Real-asset sprite decoding tests (Ikemen GO default content)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          git clone --depth 1 https://github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack ../screenpack
+          sh tests/run_real.sh ../screenpack
+
   pkg:
     runs-on: ubuntu-latest
     steps:

@@ -61,7 +61,7 @@ jobs:
           echo "--- Makefile (first lines):"
           head -20 Makefile
           echo "--- sources:"
-          ls source include pkgfiles 2>&1
+          ls source include pkgfiles 2>&1 || true
 
       - name: Build the package
         run: make pkg

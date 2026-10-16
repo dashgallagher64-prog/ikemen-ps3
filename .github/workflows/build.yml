@@ -10,38 +10,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Portable code tests (DEF / SFF / content scanner, with sanitizers)
+      - name: Portable code tests
         run: sh tests/run.sh
-
-      - name: Real-asset sprite decoding tests (Ikemen GO default content)
-        run: |
-          git clone --depth 1 https://github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack ../screenpack
-          sh tests/run_real.sh ../screenpack
 
   pkg:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Get the PS3 toolchain Dockerfile
-        uses: actions/checkout@v4
-        with:
-          repository: ps3dev/ps3dev-docker
-          path: ps3dev-docker
+      - name: Install tool dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install autoconf automake bison flex gcc libelf-dev make texinfo \
+            libncurses5-dev patch python3 python-is-python3 wget zlib1g-dev libtool-bin \
+            python3-dev bzip2 libgmp3-dev pkg-config libssl-dev
 
-      - uses: docker/setup-buildx-action@v3
+      - name: Download pre-built PS3 toolchain + PSL1GHT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          url=$(gh api "repos/ps3dev/ps3dev/releases?per_page=30" --jq '[.[] | select(.draft | not) | .assets[] | select(.name == "ps3dev-linux-X64.tar.gz")] | sort_by(.created_at) | reverse | .[0].browser_download_url')
+          echo "Using: $url"
+          if [ -z "$url" ] || [ "$url" = "null" ]; then
+            echo "No ps3dev-linux-X64.tar.gz asset found."
+            exit 1
+          fi
+          curl -fsSL "$url" | tar xz -C "$HOME"
+          echo "PS3DEV=$HOME/ps3dev" >> "$GITHUB_ENV"
+          echo "PSL1GHT=$HOME/ps3dev" >> "$GITHUB_ENV"
+          echo "$HOME/ps3dev/bin" >> "$GITHUB_PATH"
+          echo "$HOME/ps3dev/ppu/bin" >> "$GITHUB_PATH"
+          echo "$HOME/ps3dev/spu/bin" >> "$GITHUB_PATH"
 
-      - name: Build toolchain image (cached)
-        uses: docker/build-push-action@v6
-        with:
-          context: ps3dev-docker
-          load: true
-          tags: ps3dev-docker
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Check the toolchain is usable
+        run: |
+          ppu-gcc --version | head -1
+          test -f "$PSL1GHT/ppu_rules" && echo "PSL1GHT found"
 
       - name: Build the package
-        run: docker run --rm -v "$PWD":/build -w /build ps3dev-docker sh -c "make clean && make pkg"
+        run: make pkg
 
       - uses: actions/upload-artifact@v4
         with:

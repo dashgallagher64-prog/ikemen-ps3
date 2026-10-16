@@ -12,7 +12,7 @@ endif
 
 include $(PSL1GHT)/ppu_rules
 
-TARGET		:=	$(notdir $(CURDIR))
+TARGET		:=	ikemen-ps3
 BUILD		:=	build
 SOURCES		:=	source
 INCLUDES	:=	include
@@ -33,7 +33,7 @@ LIBS		:=	-lrsx -lgcm_sys -lio -lsysutil -lrt -llv2 -lm
 LIBDIRS		:=
 
 #---------------------------------------------------------------------------------
-ifneq ($(BUILD),$(notdir $(CURDIR)))
+ifneq ($(INNER),1)   # outer make; the inner one (INNER=1) runs inside build/
 #---------------------------------------------------------------------------------
 
 export OUTPUT	:=	$(CURDIR)/$(TARGET)
@@ -65,7 +65,7 @@ export LIBPATHS	:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib) \
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile INNER=1
 
 clean:
 	@echo clean ...

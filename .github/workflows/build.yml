@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Fast checks that need no network. The package is only built if these pass.
   host-tests:
     runs-on: ubuntu-latest
     steps:
@@ -30,17 +31,39 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: sh tests/run.sh
 
-      - name: PNG round-trip tests (encode with Python's zlib, decode with our inflate + PNG decoder)
+      - name: Safety checks (no risky calls, path guard, hostile-file tests)
         working-directory: ${{ env.PROJECT_DIR }}
-        run: sh tests/run_png.sh
+        run: sh tests/run_safety.sh
 
-      - name: Real-asset sprite decoding tests (Ikemen GO default content)
-        working-directory: ${{ env.PROJECT_DIR }}
+  # Needs the Ikemen GO default content from GitHub; does not block the package.
+  real-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate the project folder (Makefile + source/)
         run: |
-          git clone --depth 1 https://github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack ../screenpack
-          sh tests/run_real.sh ../screenpack
+          dir=""
+          for m in $(find . -maxdepth 3 -name Makefile -not -path './.git/*'); do
+            d=$(dirname "$m")
+            if [ -d "$d/source" ]; then dir="$d"; break; fi
+          done
+          [ -n "$dir" ] || { echo "No project folder found"; exit 1; }
+          echo "PROJECT_DIR=$dir" >> "$GITHUB_ENV"
+
+      - name: Get Ikemen GO default content
+        run: git clone --depth 1 https://github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack "$RUNNER_TEMP/screenpack"
+
+      - name: Real-asset sprite decoding tests
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: sh tests/run_real.sh "$RUNNER_TEMP/screenpack"
+
+      - name: Fuzz real files (sanitizers + memory cap)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: sh tests/run_safety.sh "$RUNNER_TEMP/screenpack"
 
   pkg:
+    needs: host-tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,14 +112,6 @@ jobs:
         run: |
           ppu-gcc --version | head -1
           test -f "$PSL1GHT/ppu_rules" && echo "PSL1GHT found"
-
-      - name: Show project layout (for debugging)
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          pwd
-          ls -la
-          echo "--- sources:"
-          ls source include pkgfiles 2>&1 || true
 
       - name: Build the package
         working-directory: ${{ env.PROJECT_DIR }}

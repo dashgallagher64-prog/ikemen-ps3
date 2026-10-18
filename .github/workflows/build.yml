@@ -58,6 +58,10 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: sh tests/run_real.sh "$RUNNER_TEMP/screenpack"
 
+      - name: Fight engine tests (animations, commands, states, a real fight)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: sh tests/run_engine.sh "$RUNNER_TEMP/screenpack"
+
       - name: Fuzz real files (sanitizers + memory cap)
         working-directory: ${{ env.PROJECT_DIR }}
         run: sh tests/run_safety.sh "$RUNNER_TEMP/screenpack"

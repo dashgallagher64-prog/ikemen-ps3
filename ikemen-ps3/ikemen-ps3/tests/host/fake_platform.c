@@ -1,7 +1,8 @@
 /* fake_platform.c - host stand-in for gfx.c + pad + sysutil so the real source/main.c menu logic
  * can run on a normal computer.
  *
- *   IK_KEYS      sequence of presses, one char per step: u d x o l r (up down cross circle L1 R1), '.' = wait
+ *   IK_KEYS      sequence of presses, one char per step: u d x o l r (up down cross circle L1 R1), '.' = wait;
+ *                capitals are held for the whole step: R L U D (directions) S T X (square triangle cross) Q (L2) E (select)
  *   IK_SHOT_DIR  if set, writes shot_NN.ppm (1280x720) after every step
  */
 #include <stdio.h>
@@ -51,7 +52,19 @@ int ioPadGetData(int port, padData *d)
     memset(d, 0, sizeof *d);
     const char *k = keys();
     size_t step = (size_t)frame / 4, n = strlen(k);
-    if (step < n && frame % 4 < 2) {
+    if (step < n && k[step] >= 'A' && k[step] <= 'Z') {          /* capitals are held for the whole step (fight inputs) */
+        switch (k[step]) {
+            case 'R': d->BTN_RIGHT = 1; break;
+            case 'L': d->BTN_LEFT = 1; break;
+            case 'U': d->BTN_UP = 1; break;
+            case 'D': d->BTN_DOWN = 1; break;
+            case 'S': d->BTN_SQUARE = 1; break;
+            case 'T': d->BTN_TRIANGLE = 1; break;
+            case 'Q': d->BTN_L2 = 1; break;
+            case 'E': d->BTN_SELECT = 1; break;
+            case 'X': d->BTN_CROSS = 1; break;
+        }
+    } else if (step < n && frame % 4 < 2) {
         switch (k[step]) {
             case 'u': d->BTN_UP = 1; break;
             case 'd': d->BTN_DOWN = 1; break;

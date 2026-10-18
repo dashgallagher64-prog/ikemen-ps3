@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include "ikemen.h"
+#define safe_rel content_safe_rel
 
 static int is_dir(const char *p)
 {
@@ -34,7 +35,7 @@ static void sort_list(ContentList *l)
 /* Copy a path from a .def into out, turning MUGEN-style backslashes into '/'.
  * Returns -1 (and out is unusable) if it is empty, absolute, has a drive/device colon, or has a ".." part.
  * Content can therefore never make the game open anything outside the folder its .def lives in. */
-static int safe_rel(const char *in, char *out, size_t n)
+int content_safe_rel(const char *in, char *out, size_t n)
 {
     size_t len = strlen(in);
     if (len == 0 || len >= n) return -1;

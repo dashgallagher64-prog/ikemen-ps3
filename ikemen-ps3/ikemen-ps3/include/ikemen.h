@@ -86,6 +86,9 @@ typedef struct {
 
 typedef struct { ContentEntry e[IK_MAX_ENTRIES]; int n; } ContentList;
 
+/* Copies a path from a .def, turning backslashes into '/'. -1 if empty, absolute, has a ':' or a ".." part. */
+int  content_safe_rel(const char *in, char *out, size_t n);
+
 void content_scan_chars(ContentList *out, const char *root);       /* chars/<dir>/<dir>.def */
 void content_scan_stages(ContentList *out, const char *root);      /* stages/NAME.def */
 void content_scan_screenpacks(ContentList *out, const char *root); /* data/system.def, data/<pack>/system.def */

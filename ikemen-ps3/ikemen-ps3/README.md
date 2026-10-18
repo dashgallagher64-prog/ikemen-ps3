@@ -60,7 +60,12 @@ Controls: D-pad up/down move, X confirm, O back, L1/R1 cycle screenpack, PS butt
 | Menu: char -> stage -> ready, with portrait (9000,0) and standing sprite (0,0) | done; logic run on the host with a fake pad |
 | RSX framebuffer, pad, sysutil exit | written against PSL1GHT headers, **never run on a PS3** |
 | Makefile / pkg build | modeled on the PSL1GHT samples; **never run with the real toolchain** |
-| AIR, CMD, CNS state-controller VM, collision, fight loop, Lua motifs, audio | not started |
+| AIR animations (parse + playback timing like Ikemen) | **done, tested on Kung Fu Man** |
+| CMD commands (motions, charge, $ ~ / > modifiers, buffer.time, common.cmd) | **done, tested** |
+| CNS/ST parser + trigger expressions (operators, intervals, redirects, `animelem`, `hitdefattr`, `command`) | **done, all of Kung Fu Man's 356 controllers compile** |
+| State controllers + fight loop (ChangeState/Anim, Vel*/Pos*, vars, HitDef, hits, get-hit states, physics, 2 players, hitbox view) | **works on the host**: he walks, jumps, crouches, punches, lands hits, does the QCF+x special |
+| Controllers not implemented yet (no-ops, counted): Explod, Helper, Projectile, Target* binds, PalFX, AfterImage, PlaySnd (no audio), SuperPause... | not yet |
+| Lua motifs, audio | not started |
 
 Verification honesty: the portable code (DEF, SFF, content, sprite decode, menu logic) runs
 and is tested on a normal computer under ASan/UBSan. The PS3-only files (`gfx.c`, `main.c`
@@ -74,6 +79,7 @@ Expect to fix small things on first build, and tell me what breaks.
     sh tests/run_real.sh <screenpack repo>   # decode real SFFs (needs a checkout of
                                              #   github.com/ikemen-engine/Ikemen_GO-Elecbyte-Screenpack)
     sh tests/run_ui.sh <content root> <out> [keys]   # run the real menu on the host, dump screenshots
+    sh tests/run_engine.sh <screenpack repo>         # animations, commands, states, a real fight, fuzzing
     sh tests/run_safety.sh [screenpack checkout]     # static safety gate, hostile files, fuzzing (see SAFETY.md)
 
 Sprite-format reference tools: `tests/sff_dump.c` (stats + contact sheet), `tests/sff_filter_test.c`.
@@ -81,9 +87,9 @@ Sprite-format reference tools: `tests/sff_dump.c` (stats + contact sheet), `test
 ## Roadmap
 
 1. SFF v2 PNG sprites (small inflate + PNG unfilter; formats 10/11/12)
-2. AIR parser + animation player
-3. CMD/CNS/ST parsing and the trigger/state-controller VM (the big part)
-4. Collision, hitdefs, projectiles, helpers
+2. (done) AIR / CMD / CNS parsing, trigger VM, basic fight loop
+3. Helpers, Explod, Projectile, Target controllers, throws, guarding polish, super pause
+4. Real-time rounds: life bars, rounds, KO, win poses
 5. Embedded Lua 5.x for Ikemen-style motifs (`system.def`, `fight.def`, select/menu)
 6. Audio: SND + WAV via libaudio
 7. Move rendering to RSX sprite batches if CPU blitting is too slow on the Cell

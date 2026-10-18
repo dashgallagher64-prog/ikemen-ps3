@@ -41,6 +41,13 @@ decoded pixels per file. Tests:
   AddressSanitizer/UBSan, 20,000 under a 150 MB memory cap), run after the limits were added:
   no crash, no hang, no memory error. `run_safety.sh` repeats a 9,000-file version of this.
 
+The text formats (`.air`, `.cmd`, `.cns`, trigger expressions) are parsed with hard caps too: files over
+2-8 MB are refused, at most 8,192 actions / 131,072 frames in an AIR, 512 commands, 16,384 states,
+200,000 controllers and ~1M expression nodes per character, expression nesting is limited to 40
+levels, and a character script cannot loop forever inside one frame: every state runs once per tick
+and a state change takes effect at most once per tick. Thousands of randomly corrupted copies
+of Kung Fu Man's `.air`/`.cmd`/`.cns` run under ASan/UBSan with no crash (`tests/run_engine.sh`).
+
 `tests/run_safety.sh [screenpack checkout]` reruns all of it.
 
 ## What can still go wrong (honest list)

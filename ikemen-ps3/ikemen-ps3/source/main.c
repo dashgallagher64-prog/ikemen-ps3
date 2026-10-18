@@ -4,8 +4,9 @@
  * the pad, and probes each character's SFF so you can confirm the big-endian
  * parsing works on real hardware. No fight engine yet.
  *
- *   D-pad up/down  move        X  confirm      O  back
- *   L1 / R1        cycle screenpack            PS button  quit to XMB
+ *   Menus:  D-pad up/down  move   X  confirm   O  back   L1 / R1  cycle screenpack   PS button  quit to XMB
+ *   Fight:  D-pad = directions    Square/Triangle/R1 = x/y/z    Cross/Circle/R2 = a/b/c
+ *           START = start   SELECT = show hitboxes   L1 = reset   L2 = back to the menu
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include <io/pad.h>
 #include <sysutil/sysutil.h>
 #include "ikemen.h"
+#include "fight.h"
 
 #define COL_BG     0xFF101820
 #define COL_TITLE  0xFFFFC040
@@ -31,7 +33,7 @@ static void sysutil_cb(uint64_t status, uint64_t param, void *ud)
     if (status == SYSUTIL_EXIT_GAME) running = 0;
 }
 
-typedef struct { int up, down, cross, circle, l1, r1; } Btn;
+typedef struct { int up, down, cross, circle, l1, r1; uint16_t fight; int l2, select; } Btn;
 
 static Btn poll_pad(void)
 {
@@ -48,6 +50,19 @@ static Btn poll_pad(void)
         b.circle |= pd.BTN_CIRCLE;
         b.l1     |= pd.BTN_L1;
         b.r1     |= pd.BTN_R1;
+        b.l2     |= pd.BTN_L2;
+        b.select |= pd.BTN_SELECT;
+        if (pd.BTN_UP)       b.fight |= FI_UP;
+        if (pd.BTN_DOWN)     b.fight |= FI_DOWN;
+        if (pd.BTN_LEFT)     b.fight |= FI_LEFT;
+        if (pd.BTN_RIGHT)    b.fight |= FI_RIGHT;
+        if (pd.BTN_CROSS)    b.fight |= FI_A;
+        if (pd.BTN_CIRCLE)   b.fight |= FI_B;
+        if (pd.BTN_R2)       b.fight |= FI_C;
+        if (pd.BTN_SQUARE)   b.fight |= FI_X;
+        if (pd.BTN_TRIANGLE) b.fight |= FI_Y;
+        if (pd.BTN_R1)       b.fight |= FI_Z;
+        if (pd.BTN_START)    b.fight |= FI_START;
     }
     return b;
 }
@@ -117,6 +132,10 @@ int main(void)
     }
 
     int screen = 0, selc = 0, sels = 0, selp = 0;
+    CharData cd; Fight fight; int fight_on = 0, cd_ok = 0, load_rc = 0;
+    static const char *const load_err[] = { "", "CHARACTER FILES MISSING", "NO STANDING STATE (STATE 0)", "OUT OF MEMORY" };
+    char common_dir[IK_PATH_LEN];
+    snprintf(common_dir, sizeof common_dir, "%s/data", IK_ROOT);
     Btn prev = {0};
     int scale = gfx_height() >= 720 ? 3 : 2;
 
@@ -125,6 +144,20 @@ int main(void)
         Btn b = poll_pad();
         int up = b.up && !prev.up, down = b.down && !prev.down;
         int ok = b.cross && !prev.cross, back = b.circle && !prev.circle;
+        if (fight_on) {
+            if (b.l2 && !prev.l2) { fight_free(&fight); chardata_free(&cd); cd_ok = 0; fight_on = 0; screen = 2; }
+            else {
+                if (b.l1 && !prev.l1) { fight_free(&fight); fight_init(&fight, &cd, &cd); if (stages.n) fight_set_stage(&fight, stages.e[sels].def); }
+                if (b.select && !prev.select) fight.show_boxes = !fight.show_boxes;
+                fight_tick(&fight, b.fight, 0);
+            }
+            prev = b;
+            uint32_t *fb = gfx_begin();
+            if (fight_on) fight_draw(&fight, fb, gfx_width(), gfx_height());
+            else gfx_clear(COL_BG);
+            gfx_end();
+            continue;
+        }
         if (b.r1 && !prev.r1 && packs.n) selp = (selp + 1) % packs.n;
         if (b.l1 && !prev.l1 && packs.n) selp = (selp + packs.n - 1) % packs.n;
         prev = b;
@@ -135,6 +168,17 @@ int main(void)
             if (up && *sel > 0) (*sel)--;
             if (down && *sel < cl->n - 1) (*sel)++;
             if (ok && (cl->n || screen == 1)) screen++;   /* stages may be empty */
+        } else if (ok) {                                  /* ready screen: start the fight */
+            load_rc = chardata_load(&cd, chars.e[selc].def, common_dir);
+            cd_ok = load_rc == 0 || load_rc == -2 ? 1 : 0;      /* chardata_load fills cd even on -2 */
+            if (load_rc == 0 && fight_init(&fight, &cd, &cd) == 0) {
+                if (stages.n) fight_set_stage(&fight, stages.e[sels].def);
+                fight_on = 1;
+            } else {
+                if (log) { fprintf(log, "fight start failed for %s rc=%d\n", chars.e[selc].name, load_rc); fflush(log); }
+                chardata_free(&cd); cd_ok = 0;
+                if (load_rc == 0) load_rc = -3;
+            }
         }
         if (back && screen > 0) screen--;
 
@@ -159,12 +203,17 @@ int main(void)
         } else {
             int line = 5 * scale + 2 * scale + 4, y = 30;
             char t[IK_PATH_LEN + 32];
-            gfx_text(40, y, scale + 1, COL_TITLE, "READY - FIGHT ENGINE NOT IMPLEMENTED YET");
+            gfx_text(40, y, scale + 1, COL_TITLE, "READY - X: FIGHT (TRAINING DUMMY)");
             y += 3 * line;
             snprintf(t, sizeof t, "CHAR:  %s", chars.e[selc].name);   gfx_text(40, y, scale, COL_TEXT, t); y += line;
             snprintf(t, sizeof t, "STAGE: %s", stages.n ? stages.e[sels].name : "-"); gfx_text(40, y, scale, COL_TEXT, t); y += line;
             snprintf(t, sizeof t, "PACK:  %s", packs.n ? packs.e[selp].name : "-");   gfx_text(40, y, scale, COL_TEXT, t); y += 2 * line;
 
+            if (load_rc != 0) {
+                int e = load_rc == -2 ? 2 : load_rc == -3 ? 3 : 1;
+                gfx_text(40, y, scale, COL_ERR, load_err[e]);
+                y += line;
+            }
             SffInfo si;
             int rc = chars.e[selc].sprite[0] ? sff_probe(chars.e[selc].sprite, &si) : -9;
             if (rc == 0) {
@@ -190,6 +239,8 @@ int main(void)
         gfx_end();
     }
 
+    if (fight_on) fight_free(&fight);
+    if (cd_ok || fight_on) chardata_free(&cd);
     if (log) fclose(log);
     return 0;
 }

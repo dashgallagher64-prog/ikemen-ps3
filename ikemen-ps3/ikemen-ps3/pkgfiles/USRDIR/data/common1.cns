@@ -1,0 +1,510 @@
+; common1.cns - the standard states every character shares (stand, crouch, walk, jump, run, hit reactions).
+; Written for this engine in MUGEN syntax. A character can ship its own by setting  stcommon = file.cns  in its .def.
+; Anim numbers follow the usual MUGEN layout (0 stand, 10-12 crouch, 20/21 walk, 40-47 jump, 100/105 dashes,
+; 150-152 guard hit, 5000+ hit reactions), so existing characters work unchanged.
+
+;---------------------------------------------------------------------------------------------- stand
+[Statedef 0]
+type = S
+movetype = I
+physics = S
+sprpriority = 0
+
+[State 0, anim]
+type = ChangeAnim
+trigger1 = Anim != 0 && Anim != 5
+trigger2 = Anim = 5 && AnimTime = 0
+value = 0
+
+[State 0, stop y]
+type = VelSet
+trigger1 = Time = 0
+y = 0
+
+[State 0, stop x]
+type = VelSet
+trigger1 = Time = 4 || abs(Vel X) < Const(movement.stand.friction.threshold)
+x = 0
+
+[State 0, KO]
+type = ChangeState
+trigger1 = !Alive
+value = 5050
+ctrl = 0
+
+[State 0, turn anim]
+type = ChangeAnim
+trigger1 = Ctrl && P2Dist X < 0 && Alive
+value = 5
+
+[State 0, turn]
+type = Turn
+trigger1 = Anim = 5 && Time = 0 && P2Dist X < 0
+
+[State 0, jump]
+type = ChangeState
+trigger1 = Ctrl && Command = "holdup"
+value = 40
+
+[State 0, crouch]
+type = ChangeState
+trigger1 = Ctrl && Command = "holddown"
+value = 10
+
+[State 0, walk]
+type = ChangeState
+trigger1 = Ctrl && (Command = "holdfwd" || Command = "holdback")
+value = 20
+
+;---------------------------------------------------------------------------------------------- stand to crouch
+[Statedef 10]
+type = C
+movetype = I
+physics = C
+anim = 10
+
+[State 10, slow]
+type = VelMul
+trigger1 = Time = 0
+x = 0.75
+
+[State 10, stop]
+type = VelSet
+trigger1 = abs(Vel X) < Const(movement.crouch.friction.threshold)
+x = 0
+
+[State 10, done]
+type = ChangeState
+trigger1 = AnimTime = 0
+value = 11
+
+;---------------------------------------------------------------------------------------------- crouch
+[Statedef 11]
+type = C
+movetype = I
+physics = C
+anim = 11
+sprpriority = 0
+
+[State 11, stop]
+type = VelSet
+trigger1 = abs(Vel X) < Const(movement.crouch.friction.threshold)
+x = 0
+
+[State 11, anim]
+type = ChangeAnim
+trigger1 = Anim = 6 && AnimTime = 0
+value = 11
+
+[State 11, KO]
+type = ChangeState
+trigger1 = !Alive
+value = 5050
+ctrl = 0
+
+[State 11, turn anim]
+type = ChangeAnim
+trigger1 = Ctrl && P2Dist X < 0 && Alive && Anim != 6
+value = 6
+
+[State 11, turn]
+type = Turn
+trigger1 = Anim = 6 && Time > 0 && P2Dist X < 0 && Facing = Facing
+
+[State 11, up]
+type = ChangeState
+trigger1 = Ctrl && Command != "holddown"
+value = 12
+
+;---------------------------------------------------------------------------------------------- crouch to stand
+[Statedef 12]
+type = S
+movetype = I
+physics = S
+anim = 12
+
+[State 12, stop]
+type = VelSet
+trigger1 = Time = 0
+x = 0
+y = 0
+
+[State 12, done]
+type = ChangeState
+trigger1 = AnimTime = 0
+value = 0
+ctrl = 1
+
+;---------------------------------------------------------------------------------------------- walk
+[Statedef 20]
+type = S
+movetype = I
+physics = S
+sprpriority = 0
+
+[State 20, fwd anim]
+type = ChangeAnim
+trigger1 = Command = "holdfwd" && Anim != 20
+value = 20
+
+[State 20, back anim]
+type = ChangeAnim
+trigger1 = Command = "holdback" && Command != "holdfwd" && Anim != 21
+value = 21
+
+[State 20, fwd vel]
+type = VelSet
+trigger1 = Command = "holdfwd"
+x = Const(velocity.walk.fwd.x)
+
+[State 20, back vel]
+type = VelSet
+trigger1 = Command = "holdback" && Command != "holdfwd"
+x = Const(velocity.walk.back.x)
+
+[State 20, jump]
+type = ChangeState
+trigger1 = Ctrl && Command = "holdup"
+value = 40
+
+[State 20, crouch]
+type = ChangeState
+trigger1 = Ctrl && Command = "holddown"
+value = 10
+
+[State 20, stop]
+type = ChangeState
+trigger1 = Command != "holdfwd" && Command != "holdback"
+value = 0
+
+;---------------------------------------------------------------------------------------------- jump start
+[Statedef 40]
+type = S
+movetype = I
+physics = S
+anim = 40
+ctrl = 0
+sprpriority = 1
+
+[State 40, stop]
+type = VelSet
+trigger1 = Time = 0
+x = 0
+y = 0
+
+[State 40, take off]
+type = VelSet
+trigger1 = AnimTime = 0
+x = ifelse(Command = "holdfwd", Const(velocity.jump.fwd.x), ifelse(Command = "holdback", Const(velocity.jump.back.x), Const(velocity.jump.neu.x)))
+y = Const(velocity.jump.neu.y)
+
+[State 40, go]
+type = ChangeState
+trigger1 = AnimTime = 0
+value = 50
+
+;---------------------------------------------------------------------------------------------- in the air
+[Statedef 50]
+type = A
+movetype = I
+physics = A
+anim = 41
+ctrl = 1
+sprpriority = 1
+
+[State 50, fwd]
+type = ChangeAnim
+trigger1 = Time = 0 && Vel X > 0
+value = 42
+
+[State 50, back]
+type = ChangeAnim
+trigger1 = Time = 0 && Vel X < 0
+value = 43
+
+;---------------------------------------------------------------------------------------------- landing
+[Statedef 52]
+type = S
+movetype = I
+physics = S
+anim = 47
+ctrl = 0
+sprpriority = 1
+
+[State 52, stop]
+type = VelSet
+trigger1 = Time = 0
+x = 0
+y = 0
+
+[State 52, ground]
+type = PosSet
+trigger1 = Time = 0
+y = 0
+
+[State 52, done]
+type = ChangeState
+trigger1 = Time >= 3 && AnimTime >= -1
+value = 0
+ctrl = 1
+
+;---------------------------------------------------------------------------------------------- run forward
+[Statedef 100]
+type = S
+movetype = I
+physics = S
+anim = 100
+ctrl = 1
+sprpriority = 1
+
+[State 100, run]
+type = VelSet
+trigger1 = 1
+x = Const(velocity.run.fwd.x)
+
+[State 100, jump]
+type = ChangeState
+trigger1 = Command = "holdup"
+value = 40
+
+[State 100, stop]
+type = ChangeState
+trigger1 = Command != "holdfwd"
+value = 0
+
+;---------------------------------------------------------------------------------------------- back dash
+[Statedef 105]
+type = A
+movetype = I
+physics = A
+anim = 105
+ctrl = 0
+sprpriority = 1
+
+[State 105, hop]
+type = VelSet
+trigger1 = Time = 0
+x = Const(velocity.run.back.x)
+y = Const(velocity.run.back.y)
+
+[State 105, land]
+type = ChangeState
+trigger1 = Vel Y > 0 && Pos Y >= 0
+value = 106
+
+[Statedef 106]
+type = S
+movetype = I
+physics = S
+anim = 47
+ctrl = 0
+
+[State 106, stop]
+type = VelSet
+trigger1 = Time = 0
+x = 0
+y = 0
+
+[State 106, ground]
+type = PosSet
+trigger1 = Time = 0
+y = 0
+
+[State 106, done]
+type = ChangeState
+trigger1 = Time >= 3
+value = 0
+ctrl = 1
+
+;---------------------------------------------------------------------------------------------- guarding a hit
+[Statedef 150]
+type = S
+movetype = H
+physics = S
+anim = 150
+ctrl = 0
+
+[State 150, done]
+type = ChangeState
+trigger1 = HitOver
+value = 0
+ctrl = 1
+
+[Statedef 151]
+type = C
+movetype = H
+physics = C
+anim = 151
+ctrl = 0
+
+[State 151, done]
+type = ChangeState
+trigger1 = HitOver
+value = 11
+ctrl = 1
+
+[Statedef 152]
+type = A
+movetype = H
+physics = A
+anim = 152
+ctrl = 0
+
+[State 152, land]
+type = ChangeState
+trigger1 = Vel Y > 0 && Pos Y >= 0
+value = 52
+
+[State 152, done]
+type = ChangeState
+trigger1 = HitOver
+value = 50
+ctrl = 1
+
+;---------------------------------------------------------------------------------------------- hit reactions
+; The engine sets velocity, hit time and the GetHitVar values when a hit connects; these states only play
+; the animation and decide where to go when the hit stun is over.
+[Statedef 5000]
+type = S
+movetype = H
+physics = S
+anim = 5000
+ctrl = 0
+
+[State 5000, anim]
+type = ChangeAnim
+trigger1 = Time = 0
+value = 5000 + ifelse(GetHitVar(animtype) > 2, 2, GetHitVar(animtype))
+
+[State 5000, done]
+type = ChangeState
+trigger1 = HitOver
+value = 0
+ctrl = 1
+
+[Statedef 5010]
+type = C
+movetype = H
+physics = C
+anim = 5010
+ctrl = 0
+
+[State 5010, anim]
+type = ChangeAnim
+trigger1 = Time = 0
+value = 5010 + ifelse(GetHitVar(animtype) > 2, 2, GetHitVar(animtype))
+
+[State 5010, done]
+type = ChangeState
+trigger1 = HitOver
+value = 11
+ctrl = 1
+
+[Statedef 5020]
+type = A
+movetype = H
+physics = A
+anim = 5020
+ctrl = 0
+
+[State 5020, anim]
+type = ChangeAnim
+trigger1 = Time = 0
+value = 5020 + ifelse(GetHitVar(animtype) > 2, 2, GetHitVar(animtype))
+
+[State 5020, fall]
+type = ChangeState
+trigger1 = HitOver
+value = 5030
+
+[State 5020, land]
+type = ChangeState
+trigger1 = Vel Y > 0 && Pos Y >= 0 && !GetHitVar(fall)
+value = 52
+ctrl = 1
+
+[Statedef 5030]
+type = A
+movetype = H
+physics = A
+anim = 5030
+ctrl = 0
+
+[State 5030, fall vel]
+type = VelSet
+trigger1 = Time = 0 && PrevStateNo = 5020 && GetHitVar(fall)
+x = GetHitVar(fall.xvel)
+y = GetHitVar(fall.yvel)
+
+[State 5030, land]
+type = ChangeState
+trigger1 = Vel Y > 0 && Pos Y >= 0
+value = 5100
+
+;---------------------------------------------------------------------------------------------- landing after a fall
+[Statedef 5100]
+type = L
+movetype = H
+physics = N
+anim = 5100
+ctrl = 0
+
+[State 5100, ground]
+type = PosSet
+trigger1 = Time = 0
+y = 0
+
+[State 5100, slide]
+type = VelSet
+trigger1 = Time = 0
+x = Vel X * 0.5
+y = 0
+
+[State 5100, lie]
+type = ChangeState
+trigger1 = AnimTime = 0
+value = 5110
+
+[Statedef 5110]
+type = L
+movetype = H
+physics = S
+anim = 5110
+ctrl = 0
+
+[State 5110, get up]
+type = ChangeState
+trigger1 = Alive && Time >= Const(data.liedown.time)
+value = 5120
+
+[Statedef 5120]
+type = S
+movetype = I
+physics = S
+anim = 5120
+ctrl = 0
+
+[State 5120, stop]
+type = VelSet
+trigger1 = Time = 0
+x = 0
+y = 0
+
+[State 5120, done]
+type = ChangeState
+trigger1 = AnimTime = 0
+value = 0
+ctrl = 1
+
+;---------------------------------------------------------------------------------------------- knocked out
+[Statedef 5050]
+type = L
+movetype = H
+physics = S
+anim = 5050
+ctrl = 0
+
+[State 5050, down]
+type = PosSet
+trigger1 = Time = 0
+y = 0

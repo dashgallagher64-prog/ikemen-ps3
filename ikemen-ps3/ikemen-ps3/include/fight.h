@@ -50,6 +50,9 @@ typedef struct {
     int32_t time; uint32_t serial;
     float x, y, vx, vy;
     Anim anim; int animno;
+    int autofit;                     /* 1 if the character was shrunk to fit the screen */
+    int ctrl_cont;                   /* the controller being run also fired on the previous tick */
+    float xs, ys;                    /* [Size] xscale / yscale: graphics and hitboxes are scaled by these */
     int life, lifemax, power, powermax;
     int32_t var[FIGHT_NVAR], sysvar[5]; float fvar[FIGHT_NFVAR], sysfvar[5];
     uint16_t raw; CmdState cs;

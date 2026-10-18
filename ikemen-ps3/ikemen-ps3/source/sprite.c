@@ -672,27 +672,35 @@ void sprite_blit(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, i
     }
 }
 
-void sprite_blit_scaled(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
-                        int x, int y, float scale, int flip)
+void sprite_blit_scaled2(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
+                         int x, int y, float scx, float scy, int flip)
 {
-    if (!sp || !sp->px || !pal || !(scale > 0.0f) || scale > 64.0f) return;
-    float fl = flip ? (float)x - (float)(sp->w - sp->ax) * scale : (float)x - (float)sp->ax * scale;
-    float ft = (float)y - (float)sp->ay * scale;
-    int ow = (int)((float)sp->w * scale + 1.0f), oh = (int)((float)sp->h * scale + 1.0f);
+    if (!sp || !sp->px || !pal || !(scx > 0.0f) || !(scy > 0.0f) || scx > 64.0f || scy > 64.0f) return;
+    float fl = flip ? (float)x - (float)(sp->w - sp->ax) * scx : (float)x - (float)sp->ax * scx;
+    float ft = (float)y - (float)sp->ay * scy;
+    int ow = (int)((float)sp->w * scx + 1.0f), oh = (int)((float)sp->h * scy + 1.0f);
+    if (ow > 8192) ow = 8192;
+    if (oh > 8192) oh = 8192;
     int left = (int)fl, top = (int)ft;
     for (int dy = 0; dy < oh; dy++) {
         int yy = top + dy;
         if (yy < 0 || yy >= dh) continue;
-        int sy = (int)((float)dy / scale);
+        int sy = (int)((float)dy / scy);
         if (sy >= sp->h) continue;
         for (int dx = 0; dx < ow; dx++) {
             int xx = left + dx;
             if (xx < 0 || xx >= dw) continue;
-            int sx = (int)((float)dx / scale);
+            int sx = (int)((float)dx / scx);
             if (sx >= sp->w) continue;
             if (flip) sx = sp->w - 1 - sx;
             uint8_t idx = sp->px[(size_t)sy * sp->w + sx];
             if (idx) dst[(size_t)yy * dw + xx] = pal[idx];
         }
     }
+}
+
+void sprite_blit_scaled(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
+                        int x, int y, float scale, int flip)
+{
+    sprite_blit_scaled2(sp, pal, dst, dw, dh, x, y, scale, scale, flip);
 }

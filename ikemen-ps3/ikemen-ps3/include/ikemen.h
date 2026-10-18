@@ -73,6 +73,8 @@ int            sff_load_ex(const char *path, Sff *out, int group, int image);
 int            sff_extract(const Sff *s, int group, int image, Sprite *out, uint32_t pal_out[256]);
 void           sprite_free(Sprite *sp);
 /* Draw so the sprite's axis lands on (x,y). Integer scale >= 1, optional horizontal flip. Clips. */
+void           sprite_blit_scaled2(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
+                                   int x, int y, float scx, float scy, int flip);
 void           sprite_blit_scaled(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
                                   int x, int y, float scale, int flip);   /* nearest-neighbour, any scale > 0 */
 void           sprite_blit(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,

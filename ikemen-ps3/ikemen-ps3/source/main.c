@@ -146,7 +146,7 @@ int main(void)
         int up = b.up && !prev.up, down = b.down && !prev.down;
         int ok = b.cross && !prev.cross, back = b.circle && !prev.circle;
         if (fight_on) {
-            if (b.l2 && !prev.l2) { fight_free(&fight); chardata_free(&cd); cd_ok = 0; fight_on = 0; screen = 2; }
+            if (b.l2 && !prev.l2) { if (log) { fprintf(log, "L2 pressed: leaving the fight\n"); fflush(log); } fight_free(&fight); chardata_free(&cd); cd_ok = 0; fight_on = 0; screen = 2; }
             else {
                 if (b.l1 && !prev.l1) { fight_free(&fight); fight_init(&fight, &cd, &cd); if (stages.n) fight_set_stage(&fight, stages.e[sels].def); }
                 if (b.select && !prev.select) fight.show_boxes = !fight.show_boxes;
@@ -170,6 +170,7 @@ int main(void)
             if (down && *sel < cl->n - 1) (*sel)++;
             if (ok && (cl->n || screen == 1)) screen++;   /* stages may be empty */
         } else if (ok) {                                  /* ready screen: start the fight */
+            if (log) { fprintf(log, "loading %s ...\n", chars.e[selc].def); fflush(log); }
             load_rc = chardata_load(&cd, chars.e[selc].def, common_dir);
             snprintf(load_problem, sizeof load_problem, "%s", cd.problem);
             if (log && load_problem[0]) { fprintf(log, "%s: %s\n", chars.e[selc].name, load_problem); fflush(log); }
@@ -177,13 +178,14 @@ int main(void)
             if (load_rc == 0 && fight_init(&fight, &cd, &cd) == 0) {
                 if (stages.n) fight_set_stage(&fight, stages.e[sels].def);
                 fight_on = 1;
+                if (log) { fprintf(log, "fight started: %s (coord %d, size %.2f x %.2f%s)\n", chars.e[selc].name, cd.coord_w, fight.p[0].xs, fight.p[0].ys, fight.p[0].autofit ? ", auto-sized" : ""); fflush(log); }
             } else {
                 if (log) { fprintf(log, "fight start failed for %s rc=%d: %s\n", chars.e[selc].name, load_rc, load_problem); fflush(log); }
                 chardata_free(&cd); cd_ok = 0;
                 if (load_rc == 0) { load_rc = -3; snprintf(load_problem, sizeof load_problem, "fight setup failed"); }
             }
         }
-        if (back && screen > 0) screen--;
+        if (back && screen > 0) { screen--; if (log) { fprintf(log, "O pressed: back to screen %d\n", screen); fflush(log); } }
 
         uint32_t *fb = gfx_begin();
         gfx_clear(COL_BG);
@@ -195,10 +197,11 @@ int main(void)
                 int px = gfx_width() - 260, py = 110;
                 gfx_rect(px - 10, py - 10, 220, 220, 0xFF1C2838);
                 if (pv) {
-                    int big = pv->sp.w > pv->sp.h ? pv->sp.w : pv->sp.h, sc = big ? 200 / big : 1;
-                    if (sc < 1) sc = 1;
-                    if (sc > 8) sc = 8;
-                    sprite_blit(&pv->sp, pv->pal, fb, gfx_width(), gfx_height(), px, py, sc, 0);
+                    int big = pv->sp.w > pv->sp.h ? pv->sp.w : pv->sp.h;
+                    float sc = big ? 200.0f / (float)big : 1.0f;      /* shrink big portraits, enlarge small ones */
+                    if (sc > 8.0f) sc = 8.0f;
+                    if (sc >= 1.0f) sc = (float)(int)sc;
+                    sprite_blit_scaled(&pv->sp, pv->pal, fb, gfx_width(), gfx_height(), px, py, sc, 0);
                 } else {
                     gfx_text(px + 20, py + 90, scale, COL_DIM, "NO PREVIEW");
                 }
@@ -231,11 +234,11 @@ int main(void)
             /* standing sprite = 0,0, drawn with its axis (feet) on the ground line */
             const Preview *pv = preview(stand, &chars, selc, 0, 0);
             if (pv) {
-                int sc = pv->sp.h ? (gfx_height() * 45 / 100) / pv->sp.h : 1;
-                if (sc < 1) sc = 1;
-                if (sc > 6) sc = 6;
-                sprite_blit(&pv->sp, pv->pal, fb, gfx_width(), gfx_height(),
-                            gfx_width() - 260, gfx_height() - 120, sc, 0);
+                float sc = pv->sp.h ? (float)(gfx_height() * 45 / 100) / (float)pv->sp.h : 1.0f;
+                if (sc > 6.0f) sc = 6.0f;
+                if (sc >= 1.0f) sc = (float)(int)sc;
+                sprite_blit_scaled(&pv->sp, pv->pal, fb, gfx_width(), gfx_height(),
+                                   gfx_width() - 260, gfx_height() - 120, sc, 0);
             }
         }
         gfx_text(40, gfx_height() - 6 * scale - 20, scale, COL_DIM,

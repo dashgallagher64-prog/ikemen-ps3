@@ -15,6 +15,13 @@ $CC tests/cns_test.c source/cns.c source/expr.c $CORE -lm -o "$T/cns_test"; "$T/
 $CC tests/fight_test.c source/fight.c source/air.c source/cmd.c source/cns.c source/expr.c $CORE \
     source/def.c source/content.c source/sff.c source/sprite.c source/gfx_draw.c -lm -o "$T/fight_test"
 "$T/fight_test" "$K/kfm.def" pkgfiles/USRDIR/data
+# one punch must be one hit, even for characters that re-fire their HitDef every tick
+$CC tests/hit_test.c source/fight.c source/air.c source/cmd.c source/cns.c source/expr.c $CORE \
+    source/def.c source/content.c source/sff.c source/sprite.c source/gfx_draw.c -lm -o "$T/hit_test"
+"$T/hit_test" "$K/kfm.def" pkgfiles/USRDIR/data
+mkdir -p "$T/refire/kfm" && cp "$K"/* "$T/refire/kfm/"
+sed -i 's/^trigger1 = AnimElem = 3$/trigger1 = AnimElem = 3, >= 0/' "$T/refire/kfm/kfm.cns"
+"$T/hit_test" "$T/refire/kfm/kfm.def" pkgfiles/USRDIR/data
 # hostile input: random mutations of the real files
 $CC tests/fuzz_air.c source/air.c $CORE -o "$T/fz1";                "$T/fz1" "$K/kfm.air"
 $CC tests/fuzz_cmd.c source/cmd.c $CORE -o "$T/fz2";                "$T/fz2" "$K/kfm.cmd"

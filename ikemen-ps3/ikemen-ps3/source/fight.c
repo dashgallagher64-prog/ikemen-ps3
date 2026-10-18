@@ -424,6 +424,8 @@ static int animtype_of(const char *s, int d)
 static void do_hitdef(Player *p, const Ctrl *k)
 {
     HitDef *h = &p->hd;
+    HitDef old = *h;
+    int cont = p->ctrl_cont && old.on;           /* same HitDef firing every tick = one activation, not many */
     memset(h, 0, sizeof *h);
     const char *at = P_raw(p, k, "attr");
     h->st = HB_S | HB_C | HB_A; h->cls = 1; h->typ = 1;
@@ -473,6 +475,7 @@ static void do_hitdef(Player *p, const Ctrl *k)
     h->givepower = P_has(p, k, "givepower", 0) ? P_int(p, k, "givepower", 0, 0) : h->damage * 6 / 10;
     h->p1stateno = P_int(p, k, "p1stateno", 0, -1); h->p2stateno = P_int(p, k, "p2stateno", 0, -1);
     h->on = 1;
+    if (cont) h->hits_left = old.hits_left < h->hits_left ? old.hits_left : h->hits_left;   /* keep a spent hit spent */
 }
 
 static void clampvar(Player *p) { if (p->life < 0) p->life = 0; if (p->life > p->lifemax) p->life = p->lifemax; if (p->power < 0) p->power = 0; if (p->power > p->powermax) p->power = p->powermax; }
@@ -619,6 +622,7 @@ static int run_state_block(Fight *f, Player *p, int stateno, int in_hitpause)
             if (p->time - p->fire_time[fi] < k->persistent) continue;
         }
         if (!ctrl_fires(p, k)) continue;
+        p->ctrl_cont = fi < p->ncfire && p->fire_serial[fi] == p->serial + 1 && p->time - p->fire_time[fi] <= 1;
         if (fi < p->ncfire) { p->fire_serial[fi] = p->serial + 1; p->fire_time[fi] = p->time; }
         if (run_ctrl(f, p, k) == RUN_STATE_CHANGED) return 1;
     }
@@ -693,19 +697,20 @@ static void player_action(Fight *f, Player *p)
     if (!paused) physics(f, p);
 }
 
-static void player_post(Fight *f, Player *p)
+/* paused0: whether the player was already paused when this tick began. A hit made during this tick must not freeze
+ * the tick it happened in: its time and animation still advance, otherwise "Time = 0" / "AnimElem = n" attack
+ * triggers would still be true when the pause ends and the HitDef would fire (and hit) again. */
+static void player_post(Fight *f, Player *p, int paused0)
 {
     (void)f;
-    int paused = is_paused(p);
-    if (!paused) {
+    if (!paused0) {
         p->time++;
         anim_tick(&p->anim);
         if (p->movecontact > 0) p->movecontact++;
         if (p->movehit > 0) p->movehit++;
         if (p->moveguarded > 0) p->moveguarded++;
-    }
-    if (p->pause > 0) p->pause--;
-    if (p->shake > 0) p->shake--;
+    } else if (p->pause > 0) p->pause--;
+    if (p->shake > 0) { if (paused0) p->shake--; }
     else if (p->hit_time > 0) p->hit_time--;
     if (p->life <= 0) p->alive = 0;
 }
@@ -717,9 +722,9 @@ static Rect world_box(const Player *p, const AirFrame *fr, const Box *b)
 {
     float d = (float)(p->facing * fr->hflip);
     Rect r;
-    float xa = p->x + d * b->x1, xb = p->x + d * b->x2;
+    float xa = p->x + d * b->x1 * p->xs, xb = p->x + d * b->x2 * p->xs;
     r.x1 = xa < xb ? xa : xb; r.x2 = xa < xb ? xb : xa;
-    r.y1 = p->y + b->y1; r.y2 = p->y + b->y2;
+    r.y1 = p->y + b->y1 * p->ys; r.y2 = p->y + b->y2 * p->ys;
     return r;
 }
 
@@ -847,6 +852,23 @@ static void world(Fight *f)
 }
 
 /* ============================================================================================ public */
+/* Safety net: a character whose standing sprite would fill most of the screen (missing localcoord, wrong [Size]
+ * scale, ...) is shrunk so it fits. Normal characters are never touched. */
+static void autofit(Player *p, float cs)
+{
+    const AirAction *a = air_find(&p->cd->air, 0);
+    if (!a || a->nframes < 1 || !p->cd->sff_ok) return;
+    const AirFrame *fr = &p->cd->air.frames[a->first];
+    const Sprite *sp = sff_find(&p->cd->sff, fr->group, fr->image);
+    if (!sp || sp->h == 0) return;
+    float ysc = fr->yscale > 0.0f ? fr->yscale : 1.0f;
+    float hgt = (float)sp->h * p->ys * ysc / cs;           /* height on the 240-line screen */
+    if (hgt > 170.0f) {
+        float k = 110.0f / hgt;
+        p->xs *= k; p->ys *= k; p->autofit = 1;
+    }
+}
+
 int fight_init(Fight *f, const CharData *c1, const CharData *c2)
 {
     memset(f, 0, sizeof *f);
@@ -865,6 +887,10 @@ int fight_init(Fight *f, const CharData *c1, const CharData *c2)
         p->alive = 1; p->ctrl = 1;
         p->lifemax = p->life = (int)cconst(p, "data.life", 1000);
         p->powermax = 3000;
+        p->xs = (float)cconst(p, "size.xscale", 1); p->ys = (float)cconst(p, "size.yscale", 1);
+        if (!(p->xs >= 0.02f && p->xs <= 20.0f)) p->xs = 1.0f;
+        if (!(p->ys >= 0.02f && p->ys <= 20.0f)) p->ys = 1.0f;
+        autofit(p, f->cs);
         p->buf_state = INT32_MIN;
         p->statetype = ST_S; p->movetype = MT_I; p->physics = PH_S;
         p->ncfire = p->cd->nctrl;
@@ -909,9 +935,10 @@ void fight_tick(Fight *f, uint16_t raw1, uint16_t raw2)
     f->p[0].raw = raw1; f->p[1].raw = raw2;
     for (int i = 0; i < 2; i++) cmdstate_tick(&f->p[i].cs, to_rel(&f->p[i], f->p[i].raw));
     for (int i = 0; i < 2; i++) player_action(f, &f->p[i]);
+    int paused0[2] = { is_paused(&f->p[0]), is_paused(&f->p[1]) };
     resolve_hits(f);
     world(f);
-    for (int i = 0; i < 2; i++) player_post(f, &f->p[i]);
+    for (int i = 0; i < 2; i++) player_post(f, &f->p[i], paused0[i]);
 }
 
 /* ============================================================================================ drawing */
@@ -948,8 +975,10 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
         if (!sp || !sp->px) continue;
         const uint32_t *pal = sff_palette(&p->cd->sff, sp);
         if (!pal) continue;
-        int ax = SX(p->x + (float)(p->facing * fr->xoff)), ay = SY(p->y + (float)fr->yoff);
-        sprite_blit_scaled(sp, pal, fb, w, h, ax, ay, (float)S / f->cs, (p->facing * fr->hflip) < 0);
+        int ax = SX(p->x + (float)(p->facing * fr->xoff) * p->xs), ay = SY(p->y + (float)fr->yoff * p->ys);
+        float fxs = fr->xscale > 0.0f ? fr->xscale : 1.0f, fys = fr->yscale > 0.0f ? fr->yscale : 1.0f;
+        sprite_blit_scaled2(sp, pal, fb, w, h, ax, ay, (float)S / f->cs * p->xs * fxs, (float)S / f->cs * p->ys * fys,
+                            (p->facing * fr->hflip) < 0);
     }
     if (f->show_boxes) {
         for (int i = 0; i < 2; i++) {
@@ -978,7 +1007,7 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
         gfx_rect(fx, 20, fill, bh, 0xFF40C060);
         int pf = p->powermax ? (int)((long long)bw * p->power / p->powermax) : 0;
         gfx_rect(i == 0 ? x : x + bw - pf, 20 + bh + 4, pf, 4, 0xFF40A0E0);
-        gfx_text(x, 20 + bh + 14, 2, 0xFFE0E0E0, p->cd->name);
+        gfx_text(x, 20 + bh + 14, 2, 0xFFE0E0E0, p->autofit ? "AUTO-SIZED" : p->cd->name);
     }
     char t[128];
     const Player *p = &f->p[0];

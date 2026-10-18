@@ -56,7 +56,10 @@ Controls: D-pad up/down move, X confirm, O back, L1/R1 cycle screenpack, PS butt
 | SFF v1: PCX decode, shared palettes, linked sprites | **done, verified on real files** |
 | SFF v2: raw 8-bit, RLE8, RLE5, LZ5, palettes, linked sprites | **done, verified on real files** (RLE5 not seen in the sample set) |
 | Single-sprite loading (`sff_load_ex`) for fast select-screen previews | done, tested |
-| SFF v2 PNG sprites (formats 10/11/12) and raw 24/32-bit | **not yet** (needs an inflate; ~half of HD/modern content uses these) |
+| SFF v2 PNG sprites, 8-bit palette (format 10; used by the HD / 720p characters) | **done, verified on the 720p Kung Fu Man** |
+| SFF v2 24/32-bit PNG (formats 11/12) and raw 24/32-bit | not yet |
+| HD characters (`localcoord = 1280,720` etc.) | drawn and simulated at the right scale |
+| File names | case-insensitive lookups (the PS3 disk is case-sensitive, most downloaded characters are not consistent) |
 | Menu: char -> stage -> ready, with portrait (9000,0) and standing sprite (0,0) | done; logic run on the host with a fake pad |
 | RSX framebuffer, pad, sysutil exit | written against PSL1GHT headers, **never run on a PS3** |
 | Makefile / pkg build | modeled on the PSL1GHT samples; **never run with the real toolchain** |
@@ -86,7 +89,7 @@ Sprite-format reference tools: `tests/sff_dump.c` (stats + contact sheet), `test
 
 ## Roadmap
 
-1. SFF v2 PNG sprites (small inflate + PNG unfilter; formats 10/11/12)
+1. (mostly done) SFF v2 PNG sprites: format 10 done; 24/32-bit PNG (11/12) still to do
 2. (done) AIR / CMD / CNS parsing, trigger VM, basic fight loop
 3. Helpers, Explod, Projectile, Target controllers, throws, guarding polish, super pause
 4. Real-time rounds: life bars, rounds, KO, win poses

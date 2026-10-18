@@ -21,6 +21,8 @@ typedef struct {
     Air air; StateDb cns; CmdList cmd; Sff sff; int sff_ok;
     uint32_t *ctrl_base; uint32_t nctrl;   /* per-state offset into the flat controller numbering */
     char name[IK_NAME_LEN], dir[IK_PATH_LEN];
+    int  coord_w;                    /* [Info] localcoord width (320 for classic MUGEN characters) */
+    char problem[160];               /* what went wrong while loading (shown on screen and logged) */
     int  warnings;                   /* files that could not be read, etc. */
 } CharData;
 
@@ -66,7 +68,7 @@ typedef struct {
 struct Fight {
     Player p[2];
     int tick, rng;
-    float camx;
+    float camx, cs;                  /* cs: character units per stage unit (localcoord / 320) */
     int left_bound, right_bound, cam_left, cam_right, zoffset;
     int show_boxes;
     int unimpl[SC_COUNT];            /* how often a controller we do not implement yet was triggered */

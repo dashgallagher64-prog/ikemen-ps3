@@ -16,8 +16,9 @@ expect() {
         *) echo "FAIL  $1"; echo "  want: $2"; echo "  got:  $out"; rm -rf "$T"; exit 1 ;;
     esac
 }
-# v2: LZ5 + one PNG sprite (PNG is not implemented yet, so exactly 1 unsupported)
-expect chars/kfm/kfm.sff     "v2 sprites=281 palettes=16 ok=280 trunc=0 format=0 unsupported=1"
+# v2: LZ5 + one PNG sprite; and the HD (720p) character, all 8-bit PNG
+expect chars/kfm/kfm.sff     "v2 sprites=281 palettes=16 ok=281 trunc=0 format=0 unsupported=0"
+expect chars/kfm720/kfm720.sff "v2 sprites=281 palettes=17 ok=281 trunc=0 format=0 unsupported=0"
 # v1: PCX with shared palettes
 expect chars/kfm/intro.sff   "v1 sprites=12 palettes=2 ok=12 trunc=0 format=0 unsupported=0 badlink=0"
 expect chars/kfm/ending.sff  "v1 sprites=7 palettes=1 ok=7"

@@ -133,6 +133,7 @@ int main(void)
 
     int screen = 0, selc = 0, sels = 0, selp = 0;
     CharData cd; Fight fight; int fight_on = 0, cd_ok = 0, load_rc = 0;
+    char load_problem[160] = "";
     static const char *const load_err[] = { "", "CHARACTER FILES MISSING", "NO STANDING STATE (STATE 0)", "OUT OF MEMORY" };
     char common_dir[IK_PATH_LEN];
     snprintf(common_dir, sizeof common_dir, "%s/data", IK_ROOT);
@@ -170,14 +171,16 @@ int main(void)
             if (ok && (cl->n || screen == 1)) screen++;   /* stages may be empty */
         } else if (ok) {                                  /* ready screen: start the fight */
             load_rc = chardata_load(&cd, chars.e[selc].def, common_dir);
+            snprintf(load_problem, sizeof load_problem, "%s", cd.problem);
+            if (log && load_problem[0]) { fprintf(log, "%s: %s\n", chars.e[selc].name, load_problem); fflush(log); }
             cd_ok = load_rc == 0 || load_rc == -2 ? 1 : 0;      /* chardata_load fills cd even on -2 */
             if (load_rc == 0 && fight_init(&fight, &cd, &cd) == 0) {
                 if (stages.n) fight_set_stage(&fight, stages.e[sels].def);
                 fight_on = 1;
             } else {
-                if (log) { fprintf(log, "fight start failed for %s rc=%d\n", chars.e[selc].name, load_rc); fflush(log); }
+                if (log) { fprintf(log, "fight start failed for %s rc=%d: %s\n", chars.e[selc].name, load_rc, load_problem); fflush(log); }
                 chardata_free(&cd); cd_ok = 0;
-                if (load_rc == 0) load_rc = -3;
+                if (load_rc == 0) { load_rc = -3; snprintf(load_problem, sizeof load_problem, "fight setup failed"); }
             }
         }
         if (back && screen > 0) screen--;
@@ -213,6 +216,7 @@ int main(void)
                 int e = load_rc == -2 ? 2 : load_rc == -3 ? 3 : 1;
                 gfx_text(40, y, scale, COL_ERR, load_err[e]);
                 y += line;
+                if (load_problem[0]) { gfx_text(40, y, scale > 1 ? scale - 1 : 1, COL_ERR, load_problem); y += line; }
             }
             SffInfo si;
             int rc = chars.e[selc].sprite[0] ? sff_probe(chars.e[selc].sprite, &si) : -9;

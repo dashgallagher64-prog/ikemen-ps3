@@ -29,7 +29,22 @@ static void join_rel(char *out, size_t n, const char *dir, const char *rel_in)
     char rel[IK_PATH_LEN];
     out[0] = 0;
     if (content_safe_rel(rel_in, rel, sizeof rel) != 0) return;
-    snprintf(out, n, "%s/%s", dir, rel);
+    content_find_ci(dir, rel, out, n);
+}
+
+static void note(CharData *cd, const char *what, const char *file)
+{
+    size_t n = strlen(cd->problem);
+    if (n + 4 >= sizeof cd->problem) return;
+    const char *base = file ? strrchr(file, '/') : NULL;
+    base = base ? base + 1 : file;
+    snprintf(cd->problem + n, sizeof cd->problem - n, "%s%s%s%s", n ? "; " : "", what, base ? " " : "", base ? base : "");
+}
+
+static int has_ext_ci(const char *s, const char *ext)
+{
+    size_t a = strlen(s), b = strlen(ext);
+    return a >= b && strcasecmp(s + a - b, ext) == 0;
 }
 
 int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
@@ -37,7 +52,7 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
     memset(cd, 0, sizeof *cd);
     cns_init(&cd->cns);
     DefFile df;
-    if (def_load(&df, def_path) != 0 || !df.e) return -1;
+    if (def_load(&df, def_path) != 0 || !df.e) { note(cd, "cannot read", def_path); return -1; }
     snprintf(cd->dir, sizeof cd->dir, "%s", def_path);
     char *sl = strrchr(cd->dir, '/');
     if (sl) *sl = 0; else strcpy(cd->dir, ".");
@@ -47,17 +62,19 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
 
     char path[IK_PATH_LEN];
     const char *v;
+    cd->coord_w = 320;
+    if ((v = def_get(&df, "Info", "localcoord")) && atoi(v) >= 64 && atoi(v) <= 8192) cd->coord_w = atoi(v);
 
     /* sprites */
     v = def_get(&df, "Files", "sprite");
     if (v && *v) { join_rel(path, sizeof path, cd->dir, v); if (path[0] && sff_load(path, &cd->sff) == 0) cd->sff_ok = 1; }
-    if (!cd->sff_ok) cd->warnings++;
+    if (!cd->sff_ok) { cd->warnings++; note(cd, "no sprites:", v); }
 
     /* animations */
     v = def_get(&df, "Files", "anim");
     int air_ok = 0;
     if (v && *v) { join_rel(path, sizeof path, cd->dir, v); if (path[0] && air_load(path, &cd->air) == 0) air_ok = 1; }
-    if (!air_ok) { cd->warnings++; memset(&cd->air, 0, sizeof cd->air); }
+    if (!air_ok) { cd->warnings++; note(cd, "no animations:", v); memset(&cd->air, 0, sizeof cd->air); }
 
     /* commands: the shared common.cmd first, then the character's own */
     snprintf(path, sizeof path, "%s/common.cmd", common_dir);
@@ -71,7 +88,7 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
     if (cmdf && *cmdf) {
         join_rel(cmdpath, sizeof cmdpath, cd->dir, cmdf);
         size_t len; char *t = cmdpath[0] ? text_load(cmdpath, CMD_MAX_FILE, &len) : NULL;
-        if (t) { cmd_parse_append(t, len, &cd->cmd); free(t); } else cd->warnings++;
+        if (t) { cmd_parse_append(t, len, &cd->cmd); free(t); } else { cd->warnings++; note(cd, "no commands:", cmdf); }
     }
 
     /* states: common1 -> cmd file's own states -> st files -> cns */
@@ -81,7 +98,7 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
         char own[IK_PATH_LEN] = "";
         if (sc && *sc) join_rel(own, sizeof own, cd->dir, sc);
         if (own[0] && file_exists(own)) cns_load(own, &cd->cns, 1);       /* character ships its own common states */
-        else if (cns_load(path, &cd->cns, 1) != 0) cd->warnings++;
+        else if (cns_load(path, &cd->cns, 1) != 0) { cd->warnings++; note(cd, "missing common state file", NULL); }
     }
     if (cmdpath[0]) cns_load(cmdpath, &cd->cns, 1);
     char done[12][IK_PATH_LEN]; int ndone = 0;
@@ -95,15 +112,17 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
         for (int k = 0; k < ndone; k++) if (!strcmp(done[k], path)) dup = 1;
         if (dup) continue;
         snprintf(done[ndone++], IK_PATH_LEN, "%s", path);
-        if (cns_load(path, &cd->cns, 1) != 0) cd->warnings++;
+        if (has_ext_ci(v, ".zss")) { cd->warnings++; note(cd, "Ikemen-only ZSS states not supported:", v); continue; }
+        if (cns_load(path, &cd->cns, 1) != 0) { cd->warnings++; note(cd, "cannot read", v); }
     }
+    if (cd->cns.truncated) note(cd, "state files too big, partly loaded", NULL);
     def_free(&df);
     cns_finish(&cd->cns);
     cd->ctrl_base = calloc((size_t)cd->cns.ns + 1, sizeof(uint32_t));
     if (!cd->ctrl_base) return -3;
     for (int i = 0; i < cd->cns.ns; i++) cd->ctrl_base[i + 1] = cd->ctrl_base[i] + (uint32_t)cd->cns.s[i].nc;
     cd->nctrl = cd->ctrl_base[cd->cns.ns];
-    if (!cns_state(&cd->cns, 0)) return -2;                              /* nothing to stand in */
+    if (!cns_state(&cd->cns, 0)) { note(cd, "no state 0 anywhere", NULL); return -2; }                              /* nothing to stand in */
     return 0;
 }
 
@@ -237,15 +256,15 @@ static Val pget(void *ud, int id, const Val *a, int n, const char *s)
     case TG_P2DISTY: return vF(q->y - p->y);
     case TG_P2BODYDISTX: return vF(dist_x(p) - width_front(p) - width_front(q));
     case TG_P2BODYDISTY: return vF(q->y - p->y);
-    case TG_SCREENPOSX: return vF(p->x - f->camx + FIGHT_LOCAL_W / 2);
+    case TG_SCREENPOSX: return vF(p->x - f->camx + (FIGHT_LOCAL_W * f->cs / 2));
     case TG_SCREENPOSY: return vF(p->y);
-    case TG_BACKEDGEDIST: return vF(p->facing > 0 ? (p->x - (f->camx - FIGHT_LOCAL_W / 2)) : ((f->camx + FIGHT_LOCAL_W / 2) - p->x));
-    case TG_FRONTEDGEDIST: return vF(p->facing > 0 ? ((f->camx + FIGHT_LOCAL_W / 2) - p->x) : (p->x - (f->camx - FIGHT_LOCAL_W / 2)));
+    case TG_BACKEDGEDIST: return vF(p->facing > 0 ? (p->x - (f->camx - (FIGHT_LOCAL_W * f->cs / 2))) : ((f->camx + (FIGHT_LOCAL_W * f->cs / 2)) - p->x));
+    case TG_FRONTEDGEDIST: return vF(p->facing > 0 ? ((f->camx + (FIGHT_LOCAL_W * f->cs / 2)) - p->x) : (p->x - (f->camx - (FIGHT_LOCAL_W * f->cs / 2))));
     case TG_BACKEDGEBODYDIST: {
-        double d = p->facing > 0 ? (p->x - (f->camx - FIGHT_LOCAL_W / 2)) : ((f->camx + FIGHT_LOCAL_W / 2) - p->x);
+        double d = p->facing > 0 ? (p->x - (f->camx - (FIGHT_LOCAL_W * f->cs / 2))) : ((f->camx + (FIGHT_LOCAL_W * f->cs / 2)) - p->x);
         return vF(d - width_back(p)); }
     case TG_FRONTEDGEBODYDIST: {
-        double d = p->facing > 0 ? ((f->camx + FIGHT_LOCAL_W / 2) - p->x) : (p->x - (f->camx - FIGHT_LOCAL_W / 2));
+        double d = p->facing > 0 ? ((f->camx + (FIGHT_LOCAL_W * f->cs / 2)) - p->x) : (p->x - (f->camx - (FIGHT_LOCAL_W * f->cs / 2)));
         return vF(d - width_front(p)); }
     case TG_ANIMEXIST: case TG_SELFANIMEXIST: return vI(n > 0 && has_anim(p, ai(a, 0)));
     case TG_ANIMELEMTIME: return vI(anim_elem_time(&p->anim, n > 0 ? ai(a, 0) : 1));
@@ -822,7 +841,7 @@ static void world(Fight *f)
     f->camx = clampf(mid, (float)f->cam_left, (float)f->cam_right);
     for (int i = 0; i < 2; i++) {
         Player *p = &f->p[i];
-        float lo = f->camx - FIGHT_LOCAL_W / 2 + 4, hi = f->camx + FIGHT_LOCAL_W / 2 - 4;
+        float lo = f->camx - (FIGHT_LOCAL_W * f->cs / 2) + 4 * f->cs, hi = f->camx + (FIGHT_LOCAL_W * f->cs / 2) - 4 * f->cs;
         p->x = clampf(p->x, lo > f->left_bound ? lo : (float)f->left_bound, hi < f->right_bound ? hi : (float)f->right_bound);
     }
 }
@@ -832,13 +851,17 @@ int fight_init(Fight *f, const CharData *c1, const CharData *c2)
 {
     memset(f, 0, sizeof *f);
     f->rng = 12345;
-    f->left_bound = -320; f->right_bound = 320; f->cam_left = -150; f->cam_right = 150; f->zoffset = FIGHT_ZOFFSET;
+    f->cs = c1->coord_w > 0 ? (float)c1->coord_w / 320.0f : 1.0f;      /* character units per stage unit */
+    if (f->cs < 0.25f) f->cs = 0.25f;
+    if (f->cs > 8.0f) f->cs = 8.0f;
+    f->left_bound = (int)(-320 * f->cs); f->right_bound = (int)(320 * f->cs);
+    f->cam_left = (int)(-150 * f->cs); f->cam_right = (int)(150 * f->cs); f->zoffset = FIGHT_ZOFFSET;
     const CharData *cds[2] = { c1, c2 };
     for (int i = 0; i < 2; i++) {
         Player *p = &f->p[i];
         p->f = f; p->cd = cds[i]; p->idx = i;
         p->facing = i == 0 ? 1 : -1;
-        p->x = i == 0 ? -70.0f : 70.0f;
+        p->x = (i == 0 ? -70.0f : 70.0f) * f->cs;
         p->alive = 1; p->ctrl = 1;
         p->lifemax = p->life = (int)cconst(p, "data.life", 1000);
         p->powermax = 3000;
@@ -869,13 +892,13 @@ void fight_set_stage(Fight *f, const char *def_path)
     DefFile d;
     if (def_load(&d, def_path) != 0 || !d.e) return;
     const char *v;
-    if ((v = def_get(&d, "PlayerInfo", "leftbound"))) f->left_bound = atoi(v);
-    if ((v = def_get(&d, "PlayerInfo", "rightbound"))) f->right_bound = atoi(v);
-    if ((v = def_get(&d, "Camera", "boundleft"))) f->cam_left = atoi(v);
-    if ((v = def_get(&d, "Camera", "boundright"))) f->cam_right = atoi(v);
+    if ((v = def_get(&d, "PlayerInfo", "leftbound"))) f->left_bound = (int)(atoi(v) * f->cs);
+    if ((v = def_get(&d, "PlayerInfo", "rightbound"))) f->right_bound = (int)(atoi(v) * f->cs);
+    if ((v = def_get(&d, "Camera", "boundleft"))) f->cam_left = (int)(atoi(v) * f->cs);
+    if ((v = def_get(&d, "Camera", "boundright"))) f->cam_right = (int)(atoi(v) * f->cs);
     if ((v = def_get(&d, "StageInfo", "zoffset"))) f->zoffset = atoi(v);
-    if (f->left_bound > f->right_bound) { f->left_bound = -320; f->right_bound = 320; }
-    if (f->cam_left > f->cam_right) { f->cam_left = -150; f->cam_right = 150; }
+    if (f->left_bound > f->right_bound) { f->left_bound = (int)(-320 * f->cs); f->right_bound = (int)(320 * f->cs); }
+    if (f->cam_left > f->cam_right) { f->cam_left = (int)(-150 * f->cs); f->cam_right = (int)(150 * f->cs); }
     if (f->zoffset < 100 || f->zoffset > 300) f->zoffset = FIGHT_ZOFFSET;
     def_free(&d);
 }
@@ -905,8 +928,8 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
     gfx_target(fb, w, h);
     int S = h / FIGHT_LOCAL_H; if (S < 1) S = 1;
     int ox = (w - FIGHT_LOCAL_W * S) / 2, oy = (h - FIGHT_LOCAL_H * S) / 2;
-#define SX(x) (ox + (int)(((x) - f->camx + FIGHT_LOCAL_W / 2) * (float)S))
-#define SY(y) (oy + (int)(((float)f->zoffset + (y)) * (float)S))
+#define SX(x) (ox + (int)((((x) - f->camx) / f->cs + FIGHT_LOCAL_W / 2) * (float)S))
+#define SY(y) (oy + (int)(((float)f->zoffset + (y) / f->cs) * (float)S))
 
     /* plain stage: sky and floor */
     gfx_clear(0xFF182030);
@@ -926,7 +949,7 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
         const uint32_t *pal = sff_palette(&p->cd->sff, sp);
         if (!pal) continue;
         int ax = SX(p->x + (float)(p->facing * fr->xoff)), ay = SY(p->y + (float)fr->yoff);
-        sprite_blit(sp, pal, fb, w, h, ax, ay, S, (p->facing * fr->hflip) < 0);
+        sprite_blit_scaled(sp, pal, fb, w, h, ax, ay, (float)S / f->cs, (p->facing * fr->hflip) < 0);
     }
     if (f->show_boxes) {
         for (int i = 0; i < 2; i++) {

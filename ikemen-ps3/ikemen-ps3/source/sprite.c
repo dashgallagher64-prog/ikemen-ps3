@@ -295,6 +295,191 @@ static int load_v1(Sff *s, const uint8_t *b, size_t len, int wg, int wi)
     return 0;
 }
 
+
+/* ------------------------------------------------------------ PNG (8-bit palette) for SFF v2 format 10 */
+/* A small inflate in the style of zlib's "puff": canonical Huffman decoding, bounded output. */
+typedef struct { const uint8_t *in; size_t n, pos; uint32_t bb; int bc; uint8_t *out; size_t cap, op; int err; } Inf;
+typedef struct { uint16_t cnt[16], sym[288]; } Huff;
+
+static int inf_bit(Inf *s)
+{
+    if (s->bc == 0) {
+        if (s->pos >= s->n) { s->err = 1; return 0; }
+        s->bb = s->in[s->pos++]; s->bc = 8;
+    }
+    int b = (int)(s->bb & 1); s->bb >>= 1; s->bc--;
+    return b;
+}
+static int inf_bits(Inf *s, int n) { int v = 0; for (int i = 0; i < n; i++) v |= inf_bit(s) << i; return v; }
+
+static int huff_build(Huff *h, const uint8_t *len, int n)
+{
+    uint16_t offs[16];
+    memset(h->cnt, 0, sizeof h->cnt);
+    for (int i = 0; i < n; i++) h->cnt[len[i]]++;
+    if (h->cnt[0] == n) return 0;
+    int left = 1;
+    for (int l = 1; l < 16; l++) { left <<= 1; left -= h->cnt[l]; if (left < 0) return -1; }
+    offs[1] = 0;
+    for (int l = 1; l < 15; l++) offs[l + 1] = (uint16_t)(offs[l] + h->cnt[l]);
+    for (int i = 0; i < n; i++) if (len[i]) h->sym[offs[len[i]]++] = (uint16_t)i;
+    return 0;
+}
+
+static int huff_dec(Inf *s, const Huff *h)
+{
+    int code = 0, first = 0, index = 0;
+    for (int l = 1; l < 16; l++) {
+        code |= inf_bit(s);
+        if (s->err) return -1;
+        int c = h->cnt[l];
+        if (code - c < first) return h->sym[index + (code - first)];
+        index += c; first += c; first <<= 1; code <<= 1;
+    }
+    return -1;
+}
+
+static int inf_codes(Inf *s, const Huff *lc, const Huff *dc)
+{
+    static const uint16_t lb[29] = {3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258};
+    static const uint8_t  le[29] = {0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0};
+    static const uint16_t db[30] = {1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577};
+    static const uint8_t  de[30] = {0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13};
+    for (;;) {
+        int sym = huff_dec(s, lc);
+        if (sym < 0 || s->err) return -1;
+        if (sym < 256) { if (s->op >= s->cap) return -1; s->out[s->op++] = (uint8_t)sym; }
+        else if (sym == 256) return 0;
+        else {
+            sym -= 257;
+            if (sym >= 29) return -1;
+            int len = lb[sym] + inf_bits(s, le[sym]);
+            int ds = huff_dec(s, dc);
+            if (ds < 0 || ds >= 30) return -1;
+            size_t dist = (size_t)db[ds] + (size_t)inf_bits(s, de[ds]);
+            if (s->err || dist > s->op || s->op + (size_t)len > s->cap) return -1;
+            for (int i = 0; i < len; i++) { s->out[s->op] = s->out[s->op - dist]; s->op++; }
+        }
+    }
+}
+
+/* returns number of bytes written, or -1 */
+static long inflate_raw(const uint8_t *in, size_t n, uint8_t *out, size_t cap)
+{
+    Inf s; memset(&s, 0, sizeof s);
+    s.in = in; s.n = n; s.out = out; s.cap = cap;
+    int last;
+    do {
+        last = inf_bit(&s);
+        int type = inf_bits(&s, 2);
+        if (s.err) return -1;
+        if (type == 0) {
+            s.bc = 0;
+            if (s.pos + 4 > s.n) return -1;
+            unsigned len = in[s.pos] | (in[s.pos + 1] << 8);
+            unsigned nlen = in[s.pos + 2] | (in[s.pos + 3] << 8);
+            s.pos += 4;
+            if (len != (~nlen & 0xFFFF) || s.pos + len > s.n || s.op + len > s.cap) return -1;
+            memcpy(s.out + s.op, in + s.pos, len); s.op += len; s.pos += len;
+        } else if (type == 1) {
+            uint8_t l[288]; Huff lc, dc;
+            for (int i = 0; i < 144; i++) l[i] = 8;
+            for (int i = 144; i < 256; i++) l[i] = 9;
+            for (int i = 256; i < 280; i++) l[i] = 7;
+            for (int i = 280; i < 288; i++) l[i] = 8;
+            huff_build(&lc, l, 288);
+            for (int i = 0; i < 30; i++) l[i] = 5;
+            huff_build(&dc, l, 30);
+            if (inf_codes(&s, &lc, &dc)) return -1;
+        } else if (type == 2) {
+            static const uint8_t ord[19] = {16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15};
+            uint8_t l[320]; Huff lc, dc, cc;
+            int nlen = inf_bits(&s, 5) + 257, ndist = inf_bits(&s, 5) + 1, ncode = inf_bits(&s, 4) + 4;
+            if (s.err || nlen > 286 || ndist > 30) return -1;
+            memset(l, 0, sizeof l);
+            for (int i = 0; i < ncode; i++) l[ord[i]] = (uint8_t)inf_bits(&s, 3);
+            if (huff_build(&cc, l, 19) < 0) return -1;
+            int idx = 0;
+            uint8_t ll[320]; memset(ll, 0, sizeof ll);
+            while (idx < nlen + ndist) {
+                int sym = huff_dec(&s, &cc);
+                if (sym < 0) return -1;
+                if (sym < 16) ll[idx++] = (uint8_t)sym;
+                else {
+                    int prev = 0, rep;
+                    if (sym == 16) { if (idx == 0) return -1; prev = ll[idx - 1]; rep = 3 + inf_bits(&s, 2); }
+                    else if (sym == 17) rep = 3 + inf_bits(&s, 3);
+                    else rep = 11 + inf_bits(&s, 7);
+                    if (idx + rep > nlen + ndist) return -1;
+                    while (rep--) ll[idx++] = (uint8_t)prev;
+                }
+                if (s.err) return -1;
+            }
+            if (ll[256] == 0) return -1;
+            if (huff_build(&lc, ll, nlen) < 0 || huff_build(&dc, ll + nlen, ndist) < 0) return -1;
+            if (inf_codes(&s, &lc, &dc)) return -1;
+        } else return -1;
+    } while (!last);
+    return (long)s.op;
+}
+
+/* 8-bit palette PNG -> w*h indices. Returns 0 or an SPR_ERR_*. */
+static int dec_png8(const uint8_t *src, size_t n, uint8_t *px, int w, int h)
+{
+    if (n < 33 || memcmp(src, "\x89PNG\r\n\x1a\n", 8) != 0) return SPR_ERR_FORMAT;
+    size_t pos = 8, idat_len = 0;
+    int pw = 0, ph = 0, depth = 0, ctype = -1, interlace = 0;
+    uint8_t *idat = malloc(n);
+    if (!idat) return SPR_ERR_NOMEM;
+    while (pos + 12 <= n) {
+        uint32_t cl = ((uint32_t)src[pos] << 24) | ((uint32_t)src[pos + 1] << 16) | ((uint32_t)src[pos + 2] << 8) | src[pos + 3];
+        const uint8_t *tp = src + pos + 4, *d = src + pos + 8;
+        if (cl > n || pos + 12 + cl > n) break;
+        if (!memcmp(tp, "IHDR", 4) && cl >= 13) {
+            pw = (int)(((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) | ((uint32_t)d[2] << 8) | d[3]);
+            ph = (int)(((uint32_t)d[4] << 24) | ((uint32_t)d[5] << 16) | ((uint32_t)d[6] << 8) | d[7]);
+            depth = d[8]; ctype = d[9]; interlace = d[12];
+        } else if (!memcmp(tp, "IDAT", 4)) { memcpy(idat + idat_len, d, cl); idat_len += cl; }
+        else if (!memcmp(tp, "IEND", 4)) break;
+        pos += 12 + cl;
+    }
+    int rc = 0;
+    uint8_t *raw = NULL;
+    if (pw != w || ph != h || w <= 0 || h <= 0) rc = SPR_ERR_FORMAT;
+    else if (depth != 8 || ctype != 3 || interlace) rc = SPR_ERR_UNSUPPORTED;
+    else if (idat_len < 6) rc = SPR_ERR_TRUNC;
+    if (!rc) {
+        size_t rawn = ((size_t)w + 1) * (size_t)h;
+        raw = malloc(rawn);
+        if (!raw) rc = SPR_ERR_NOMEM;
+        else if (inflate_raw(idat + 2, idat_len - 2, raw, rawn) != (long)rawn) rc = SPR_ERR_TRUNC;
+        else {
+            for (int y = 0; y < h; y++) {
+                const uint8_t *r = raw + (size_t)y * ((size_t)w + 1);
+                uint8_t *o = px + (size_t)y * w;
+                const uint8_t *up = y ? px + (size_t)(y - 1) * w : NULL;
+                int ft = r[0]; r++;
+                for (int x = 0; x < w; x++) {
+                    int a = x ? o[x - 1] : 0, b = up ? up[x] : 0, c = (x && up) ? up[x - 1] : 0, v = r[x];
+                    switch (ft) {
+                    case 0: break;
+                    case 1: v += a; break;
+                    case 2: v += b; break;
+                    case 3: v += (a + b) / 2; break;
+                    case 4: { int p = a + b - c, pa = abs(p - a), pb = abs(p - b), pc = abs(p - c);
+                              v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break; }
+                    default: rc = SPR_ERR_FORMAT; break;
+                    }
+                    o[x] = (uint8_t)v;
+                }
+                if (rc) break;
+            }
+        }
+    }
+    free(raw); free(idat);
+    return rc;
+}
+
 /* ------------------------------------------------------------ v2 */
 
 static int load_v2(Sff *s, const uint8_t *b, size_t len, int wg, int wi)
@@ -373,8 +558,15 @@ static int load_v2(Sff *s, const uint8_t *b, size_t len, int wg, int wi)
                 else if (fmt == 3) dec_rle5(src + 4, size - 4, px, total);
                 else dec_lz5(src + 4, size - 4, px, total);
             }
+        } else if (fmt == 10) {
+            if (size < 4) { sp->err = SPR_ERR_TRUNC; continue; }
+            px = calloc(total, 1);
+            if (px) {
+                int e = dec_png8(src + 4, size - 4, px, w, ht);
+                if (e) { free(px); sp->err = e; continue; }
+            }
         } else {
-            sp->err = SPR_ERR_UNSUPPORTED;     /* 10/11/12 = PNG: needs zlib/libpng */
+            sp->err = SPR_ERR_UNSUPPORTED;     /* 11/12 = 24/32-bit PNG: needs a true-colour sprite path */
             continue;
         }
         if (!px) { sp->err = SPR_ERR_NOMEM; continue; }
@@ -476,6 +668,31 @@ void sprite_blit(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, i
                     if (xx >= 0 && xx < dw) dst[(size_t)yy * dw + xx] = pal[idx];
                 }
             }
+        }
+    }
+}
+
+void sprite_blit_scaled(const Sprite *sp, const uint32_t *pal, uint32_t *dst, int dw, int dh,
+                        int x, int y, float scale, int flip)
+{
+    if (!sp || !sp->px || !pal || !(scale > 0.0f) || scale > 64.0f) return;
+    float fl = flip ? (float)x - (float)(sp->w - sp->ax) * scale : (float)x - (float)sp->ax * scale;
+    float ft = (float)y - (float)sp->ay * scale;
+    int ow = (int)((float)sp->w * scale + 1.0f), oh = (int)((float)sp->h * scale + 1.0f);
+    int left = (int)fl, top = (int)ft;
+    for (int dy = 0; dy < oh; dy++) {
+        int yy = top + dy;
+        if (yy < 0 || yy >= dh) continue;
+        int sy = (int)((float)dy / scale);
+        if (sy >= sp->h) continue;
+        for (int dx = 0; dx < ow; dx++) {
+            int xx = left + dx;
+            if (xx < 0 || xx >= dw) continue;
+            int sx = (int)((float)dx / scale);
+            if (sx >= sp->w) continue;
+            if (flip) sx = sp->w - 1 - sx;
+            uint8_t idx = sp->px[(size_t)sy * sp->w + sx];
+            if (idx) dst[(size_t)yy * dw + xx] = pal[idx];
         }
     }
 }

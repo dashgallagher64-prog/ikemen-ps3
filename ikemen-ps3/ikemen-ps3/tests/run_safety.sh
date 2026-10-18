@@ -29,7 +29,7 @@ done
 
 if [ -n "$1" ]; then
     R=$1
-    SEEDS="$R/chars/kfm/kfm.sff $R/chars/kfm/intro.sff $R/chars/kfm/ending.sff $R/font/f-6x9.sff $R/font/arcade.sff $R/stages/stageZ.sff"
+    SEEDS="$R/chars/kfm720/kfm720.sff $R/chars/kfm/kfm.sff $R/chars/kfm/intro.sff $R/chars/kfm/ending.sff $R/font/f-6x9.sff $R/font/arcade.sff $R/stages/stageZ.sff"
     echo; echo "== 4. fuzz: corrupt real SFFs thousands of times"
     $CC -fsanitize=address,undefined -fno-sanitize-recover=undefined -o "$T/fuzz_asan" tests/fuzz_sff.c source/sprite.c
     for seed in 1 2; do "$T/fuzz_asan" 1500 $seed "$T/mut.sff" $SEEDS | sed 's/^/   [asan] /'; done

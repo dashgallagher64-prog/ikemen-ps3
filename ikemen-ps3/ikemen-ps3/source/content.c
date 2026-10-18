@@ -68,7 +68,7 @@ static void read_name(ContentEntry *e, const char *fallback)
         char rel[IK_PATH_LEN];
         /* a .def may only point at files inside its own folder tree (no "..", no absolute paths) */
         if (s && *s && safe_rel(s, rel, sizeof rel) == 0)
-            snprintf(e->sprite, sizeof e->sprite, "%s/%s", e->dir, rel);
+            content_find_ci(e->dir, rel, e->sprite, sizeof e->sprite);
         def_free(&f);
     }
 }
@@ -175,4 +175,45 @@ void content_scan_screenpacks(ContentList *out, const char *root)
     /* keep "default" first, sort the rest */
     int start = (out->n && !strcmp(out->e[0].name, "default")) ? 1 : 0;
     qsort(out->e + start, out->n - start, sizeof(ContentEntry), cmp_entry);
+}
+
+/* Resolves dir/rel to a path that really exists, matching each part case-insensitively. Windows-made characters
+ * routinely write "Kfm.CNS" in the .def for a file called "kfm.cns", and the PS3 disk is case-sensitive.
+ * rel must already have passed content_safe_rel (no "..", not absolute). Only reads directory listings.
+ * Returns 0 if found. If nothing matches, out is the plain dir/rel and -1 is returned. */
+int content_find_ci(const char *dir, const char *rel, char *out, size_t n)
+{
+    char cur[IK_PATH_LEN];
+    snprintf(cur, sizeof cur, "%s", dir);
+    snprintf(out, n, "%s/%s", dir, rel);
+    int ok = 1;
+    const char *p = rel;
+    while (*p) {
+        const char *q = strchr(p, '/');
+        size_t part = q ? (size_t)(q - p) : strlen(p);
+        if (part == 0) { p = q ? q + 1 : p + strlen(p); continue; }
+        if (part >= IK_NAME_LEN) return -1;
+        char name[IK_NAME_LEN];
+        memcpy(name, p, part); name[part] = 0;
+        char next[IK_PATH_LEN];
+        struct stat st;
+        snprintf(next, sizeof next, "%s/%s", cur, name);
+        if (stat(next, &st) != 0) {
+            int found = 0;
+            DIR *d = opendir(cur);
+            if (d) {
+                struct dirent *de;
+                while ((de = readdir(d))) {
+                    if (!strcasecmp(de->d_name, name)) { snprintf(next, sizeof next, "%s/%s", cur, de->d_name); found = 1; break; }
+                }
+                closedir(d);
+            }
+            if (!found) ok = 0;
+        }
+        if (!ok) return -1;
+        snprintf(cur, sizeof cur, "%s", next);
+        p = q ? q + 1 : p + part;
+    }
+    snprintf(out, n, "%s", cur);
+    return 0;
 }

@@ -131,6 +131,7 @@ int main(void)
         fflush(log);
     }
 
+    chardata_set_log(log);
     int screen = 0, selc = 0, sels = 0, selp = 0;
     CharData cd; Fight fight; int fight_on = 0, cd_ok = 0, load_rc = 0;
     char load_problem[160] = "";
@@ -171,10 +172,12 @@ int main(void)
             if (ok && (cl->n || screen == 1)) screen++;   /* stages may be empty */
         } else if (ok) {                                  /* ready screen: start the fight */
             if (log) { fprintf(log, "loading %s ...\n", chars.e[selc].def); fflush(log); }
+            { uint32_t *lf = gfx_begin(); (void)lf; gfx_clear(COL_BG); gfx_text(40, 40, scale + 1, COL_TITLE, "LOADING..."); gfx_end(); }
             load_rc = chardata_load(&cd, chars.e[selc].def, common_dir);
             snprintf(load_problem, sizeof load_problem, "%s", cd.problem);
             if (log && load_problem[0]) { fprintf(log, "%s: %s\n", chars.e[selc].name, load_problem); fflush(log); }
             cd_ok = load_rc == 0 || load_rc == -2 ? 1 : 0;      /* chardata_load fills cd even on -2 */
+            if (log) { fprintf(log, "load done rc=%d\n", load_rc); fflush(log); }
             if (load_rc == 0 && fight_init(&fight, &cd, &cd) == 0) {
                 if (stages.n) fight_set_stage(&fight, stages.e[sels].def);
                 fight_on = 1;

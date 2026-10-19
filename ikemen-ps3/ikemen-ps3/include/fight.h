@@ -2,6 +2,7 @@
 #define IK_FIGHT_H
 /* The fight: characters, per-tick state machine, physics, hits and drawing. Portable C (no PS3 headers). */
 #include <stdint.h>
+#include <stdio.h>
 #include "ikemen.h"
 #include "air.h"
 #include "cmd.h"
@@ -44,7 +45,7 @@ typedef struct {
 } HitDef;
 
 typedef struct Fight Fight;
-typedef struct {
+typedef struct Player {
     Fight *f; const CharData *cd; int idx;
     int stateno, prev_stateno, statetype, prev_type, movetype, physics, ctrl, alive, facing;
     int32_t time; uint32_t serial;
@@ -66,7 +67,30 @@ typedef struct {
     uint32_t *fire_serial; int32_t *fire_time; uint32_t ncfire;   /* persistent= bookkeeping per controller */
     int ntarget; int target_idx;
     int hitcount;
+    /* helpers (Helper controller): they share the root's CharData and run its states */
+    int is_helper, live, dead, hid, pid;          /* hid = the Helper ID= parameter, pid = unique player id */
+    struct Player *parent, *root;
+    int bindmode, bindtime, bindface; float bind_ox, bind_oy;   /* BindToParent / BindToRoot */
+    int pj_id, pj_contact, pj_hit, pj_guard;      /* last projectile event (ticks since), for ProjContactTime etc. */
 } Player;
+
+#define FIGHT_MAXHELPER 16
+#define FIGHT_MAXEXPLOD 48
+#define FIGHT_MAXPROJ   24
+
+typedef struct {                     /* Explod: a visual effect */
+    int on, owner, id, sprpri, ontop, roh, postype, bindtime, removetime, time, facing;
+    float x, y, vx, vy, ax, ay, ox, oy, xs, ys;
+    const CharData *cd; Anim anim;
+} Explod;
+
+typedef struct {                     /* Projectile */
+    int on, owner, id, time, remove, removetime, misstime, cool, sprpri, facing;
+    int hitanim, remanim;
+    float x, y, vx, vy, ax, ay, xs, ys;
+    HitDef hd;
+    const CharData *cd; Anim anim;
+} Proj;
 
 struct Fight {
     Player p[2];
@@ -76,6 +100,10 @@ struct Fight {
     int show_boxes;
     int unimpl[SC_COUNT];            /* how often a controller we do not implement yet was triggered */
     int missing_state;               /* ChangeState to a state that does not exist */
+    Player  h[FIGHT_MAXHELPER];
+    Explod  ex[FIGHT_MAXEXPLOD];
+    Proj    pr[FIGHT_MAXPROJ];
+    int next_pid, overflow;          /* overflow: helpers/explods/projectiles dropped because a pool was full */
 };
 
 int  fight_init(Fight *f, const CharData *c1, const CharData *c2);

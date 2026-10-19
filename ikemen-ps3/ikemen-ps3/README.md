@@ -67,7 +67,8 @@ Controls: D-pad up/down move, X confirm, O back, L1/R1 cycle screenpack, PS butt
 | CMD commands (motions, charge, $ ~ / > modifiers, buffer.time, common.cmd) | **done, tested** |
 | CNS/ST parser + trigger expressions (operators, intervals, redirects, `animelem`, `hitdefattr`, `command`) | **done, all of Kung Fu Man's 356 controllers compile** |
 | State controllers + fight loop (ChangeState/Anim, Vel*/Pos*, vars, HitDef, hits, get-hit states, physics, 2 players, hitbox view) | **works on the host**: he walks, jumps, crouches, punches, lands hits, does the QCF+x special |
-| Controllers not implemented yet (no-ops, counted): Explod, Helper, Projectile, Target* binds, PalFX, AfterImage, PlaySnd (no audio), SuperPause... | not yet |
+| Helper (+DestroySelf, BindToParent/Root, ParentVarSet/Add), Explod (+Remove/Modify), Projectile, helper/parent/root/playerid redirects, NumHelper/NumExplod/NumProj, ProjContact/Hit/GuardedTime | yes (up to 16 helpers, 48 explods, 24 projectiles; extras are dropped, never crash) |
+| Controllers not implemented yet (no-ops, counted): Target* binds (BindToTarget), PalFX, AfterImage, PlaySnd (no audio), SuperPause... | not yet |
 | Lua motifs, audio | not started |
 
 Verification honesty: the portable code (DEF, SFF, content, sprite decode, menu logic) runs
@@ -91,7 +92,7 @@ Sprite-format reference tools: `tests/sff_dump.c` (stats + contact sheet), `test
 
 1. (mostly done) SFF v2 PNG sprites: format 10 done; 24/32-bit PNG (11/12) still to do
 2. (done) AIR / CMD / CNS parsing, trigger VM, basic fight loop
-3. Helpers, Explod, Projectile, Target controllers, throws, guarding polish, super pause
+3. Target controllers, throws, guarding polish, super pause
 4. Real-time rounds: life bars, rounds, KO, win poses
 5. Embedded Lua 5.x for Ikemen-style motifs (`system.def`, `fight.def`, select/menu)
 6. Audio: SND + WAV via libaudio

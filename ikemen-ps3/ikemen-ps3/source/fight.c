@@ -47,6 +47,10 @@ static int has_ext_ci(const char *s, const char *ext)
     return a >= b && strcasecmp(s + a - b, ext) == 0;
 }
 
+static FILE *g_log;
+void chardata_set_log(FILE *f) { g_log = f; }
+#define STEP(msg) do { if (g_log) { fprintf(g_log, "  load: %s\n", msg); fflush(g_log); } } while (0)
+
 int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
 {
     memset(cd, 0, sizeof *cd);
@@ -65,17 +69,20 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
     cd->coord_w = 320;
     if ((v = def_get(&df, "Info", "localcoord")) && atoi(v) >= 64 && atoi(v) <= 8192) cd->coord_w = atoi(v);
 
+    STEP("sprites");
     /* sprites */
     v = def_get(&df, "Files", "sprite");
     if (v && *v) { join_rel(path, sizeof path, cd->dir, v); if (path[0] && sff_load(path, &cd->sff) == 0) cd->sff_ok = 1; }
     if (!cd->sff_ok) { cd->warnings++; note(cd, "no sprites:", v); }
 
+    STEP("animations");
     /* animations */
     v = def_get(&df, "Files", "anim");
     int air_ok = 0;
     if (v && *v) { join_rel(path, sizeof path, cd->dir, v); if (path[0] && air_load(path, &cd->air) == 0) air_ok = 1; }
     if (!air_ok) { cd->warnings++; note(cd, "no animations:", v); memset(&cd->air, 0, sizeof cd->air); }
 
+    STEP("commands");
     /* commands: the shared common.cmd first, then the character's own */
     snprintf(path, sizeof path, "%s/common.cmd", common_dir);
     memset(&cd->cmd, 0, sizeof cd->cmd);
@@ -91,6 +98,7 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
         if (t) { cmd_parse_append(t, len, &cd->cmd); free(t); } else { cd->warnings++; note(cd, "no commands:", cmdf); }
     }
 
+    STEP("states");
     /* states: common1 -> cmd file's own states -> st files -> cns */
     snprintf(path, sizeof path, "%s/common1.cns", common_dir);
     {
@@ -116,6 +124,7 @@ int chardata_load(CharData *cd, const char *def_path, const char *common_dir)
         if (cns_load(path, &cd->cns, 1) != 0) { cd->warnings++; note(cd, "cannot read", v); }
     }
     if (cd->cns.truncated) note(cd, "state files too big, partly loaded", NULL);
+    STEP("finish");
     def_free(&df);
     cns_finish(&cd->cns);
     cd->ctrl_base = calloc((size_t)cd->cns.ns + 1, sizeof(uint32_t));
@@ -135,6 +144,21 @@ void chardata_free(CharData *cd)
 
 /* ============================================================================================ helpers */
 static Player *opp(const Player *p) { return &p->f->p[p->idx ^ 1]; }
+static Player *root_of(Player *p) { return p->is_helper && p->root ? p->root : p; }
+static Player *find_helper(Fight *f, const Player *root, int id)
+{
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) {
+        Player *h = &f->h[i];
+        if (h->live && h->root == root && (id < 0 || h->hid == id)) return h;
+    }
+    return NULL;
+}
+static Player *find_pid(Fight *f, int pid)
+{
+    for (int i = 0; i < 2; i++) if (f->p[i].pid == pid) return &f->p[i];
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) if (f->h[i].live && f->h[i].pid == pid) return &f->h[i];
+    return NULL;
+}
 static int rnd(Fight *f) { f->rng = (int)((uint32_t)f->rng * 1103515245u + 12345u); return (int)(((uint32_t)f->rng >> 16) & 0x7fff); }
 static Val vI(int32_t i) { return val_int(i); }
 static Val vF(double x) { return val_flt(x); }
@@ -157,7 +181,7 @@ static float width_back(const Player *p)
 static int has_anim(const Player *p, int no) { return air_find(&p->cd->air, no) != NULL; }
 
 /* ============================================================================================ trigger context */
-static int is_cmd(const Player *p, const char *n) { return cmdstate_active(&p->cs, n); }
+static int is_cmd(const Player *p, const char *n) { return p->is_helper || !p->cs.l ? 0 : cmdstate_active(&p->cs, n); }
 
 static Val ghv(const Player *p, const char *s)
 {
@@ -241,7 +265,30 @@ static Val pget(void *ud, int id, const Val *a, int n, const char *s)
     case TG_GAMETIME: return vI(f->tick);
     case TG_NUMTARGET: return vI(p->ntarget);
     case TG_TEAMSIDE: return vI(p->idx + 1);
-    case TG_ID: return vI(1000 + p->idx);
+    case TG_ID: return vI(p->pid);
+    case TG_NUMHELPER: {
+        Player *r = root_of(p); int c = 0;
+        for (int i = 0; i < FIGHT_MAXHELPER; i++) if (f->h[i].live && f->h[i].root == r && (n < 1 || f->h[i].hid == ai(a, 0))) c++;
+        return vI(c); }
+    case TG_NUMEXPLOD: {
+        int c = 0;
+        for (int i = 0; i < FIGHT_MAXEXPLOD; i++) if (f->ex[i].on && f->ex[i].owner == p->idx && (n < 1 || f->ex[i].id == ai(a, 0))) c++;
+        return vI(c); }
+    case TG_NUMPROJ: {
+        int c = 0;
+        for (int i = 0; i < FIGHT_MAXPROJ; i++) if (f->pr[i].on && f->pr[i].owner == p->idx) c++;
+        return vI(c); }
+    case TG_ISHELPER: return vI(p->is_helper && (n < 1 || p->hid == ai(a, 0)));
+    case TG_PARENTDISTX: return vF(p->parent ? (p->parent->x - p->x) * (float)p->facing : 0);
+    case TG_PARENTDISTY: return vF(p->parent ? p->parent->y - p->y : 0);
+    case TG_ROOTDISTX: return vF(p->is_helper && p->root ? (p->root->x - p->x) * (float)p->facing : 0);
+    case TG_ROOTDISTY: return vF(p->is_helper && p->root ? p->root->y - p->y : 0);
+    case TG_PARENTID: return vI(p->parent ? p->parent->pid : -1);
+    case TG_PLAYERIDEXIST: return vI(n > 0 && find_pid(f, ai(a, 0)) != NULL);
+    case TG_PROJCONTACT: case TG_PROJHIT: case TG_PROJGUARDED: {
+        const Player *r = root_of(p);
+        int t = id == TG_PROJCONTACT ? r->pj_contact : id == TG_PROJHIT ? r->pj_hit : r->pj_guard;
+        return vI(t > 0 && (n < 1 || ai(a, 0) <= 0 || r->pj_id == ai(a, 0)) ? t : 0); }
     case TG_NUMENEMY: case TG_NUMPLAYERS: return vI(p->f ? (id == TG_NUMENEMY ? 1 : 2) : 0);
     case TG_P2LIFE: return vI(q->life);
     case TG_P2STATENO: return vI(q->stateno);
@@ -298,9 +345,12 @@ static int pset(void *ud, int kind, int idx, Val v)
 static void *predirect(void *ud, int kind, int arg)
 {
     Player *p = (Player *)ud;
-    (void)arg;
     switch (kind) {
-    case RD_ROOT: case RD_SELF: return p;
+    case RD_SELF: return p;
+    case RD_ROOT: return root_of(p);
+    case RD_PARENT: return p->is_helper ? (void *)p->parent : NULL;
+    case RD_HELPER: return find_helper(p->f, root_of(p), arg);
+    case RD_PLAYERID: return find_pid(p->f, arg);
     case RD_P2: case RD_ENEMY: case RD_ENEMYNEAR: return opp(p);
     case RD_TARGET: return p->ntarget > 0 ? (void *)opp(p) : NULL;
     default: return NULL;
@@ -480,6 +530,201 @@ static void do_hitdef(Player *p, const Ctrl *k)
 
 static void clampvar(Player *p) { if (p->life < 0) p->life = 0; if (p->life > p->lifemax) p->life = p->lifemax; if (p->power < 0) p->power = 0; if (p->power > p->powermax) p->power = p->powermax; }
 
+/* ============================================================================================ helpers, explods, projectiles */
+static int postype_of(const char *s)
+{
+    if (!s) return 0;
+    while (*s == ' ') s++;
+    if (!strncasecmp(s, "p2", 2)) return 1;
+    if (!strncasecmp(s, "front", 5)) return 2;
+    if (!strncasecmp(s, "back", 4)) return 3;
+    if (!strncasecmp(s, "left", 4)) return 4;
+    if (!strncasecmp(s, "right", 5)) return 5;
+    if (!strncasecmp(s, "none", 4)) return 6;
+    return 0;                                    /* p1 */
+}
+
+/* where an effect with a PosType and an offset goes (world units = character units) */
+static void place(const Fight *f, const Player *par, int pt, float px, float py, float *x, float *y, int *facing)
+{
+    float edge = FIGHT_LOCAL_W * f->cs / 2;
+    int fc = par->facing;
+    switch (pt) {
+    case 1: { const Player *o = &f->p[par->idx ^ 1]; *x = o->x + px * (float)o->facing; *y = o->y + py; fc = o->facing; break; }
+    case 2: *x = f->camx + (par->facing > 0 ? edge : -edge) + px * (float)par->facing; *y = py; break;
+    case 3: *x = f->camx + (par->facing > 0 ? -edge : edge) + px * (float)par->facing; *y = py; break;
+    case 4: *x = f->camx - edge + px; *y = py; fc = 1; break;
+    case 5: *x = f->camx + edge + px; *y = py; fc = 1; break;
+    case 6: *x = px; *y = py; fc = 1; break;
+    default: *x = par->x + px * (float)par->facing; *y = par->y + py; break;
+    }
+    *facing = fc;
+}
+
+static void helper_release(Player *h)
+{
+    free(h->fire_serial); free(h->fire_time);
+    h->fire_serial = NULL; h->fire_time = NULL; h->ncfire = 0;
+    h->live = 0; h->dead = 0;
+}
+
+static void apply_bind(Player *h, int dec)
+{
+    if (!h->bindmode || h->bindtime == 0) return;
+    const Player *t = h->bindmode == 1 ? h->parent : h->root;
+    if (!t) { h->bindtime = 0; return; }
+    h->x = t->x + h->bind_ox * (float)t->facing; h->y = t->y + h->bind_oy;
+    if (h->bindface) h->facing = t->facing * h->bindface;
+    if (dec && h->bindtime > 0) h->bindtime--;
+}
+
+static void spawn_helper(Fight *f, Player *par, const Ctrl *k)
+{
+    int slot = -1;
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) if (!f->h[i].live) { slot = i; break; }
+    if (slot < 0) { f->overflow++; return; }
+    int stateno = P_int(par, k, "stateno", 0, 0);
+    if (!cns_state(&par->cd->cns, stateno)) { f->missing_state++; return; }
+    Player *h = &f->h[slot], *r = root_of(par);
+    memset(h, 0, sizeof *h);
+    h->f = f; h->cd = par->cd; h->idx = par->idx; h->is_helper = 1; h->live = 1; h->parent = par; h->root = r;
+    h->hid = P_int(par, k, "id", 0, 0); h->pid = f->next_pid++;
+    int fc;
+    place(f, par, postype_of(P_raw(par, k, "postype")), P_flt(par, k, "pos", 0, 0), P_flt(par, k, "pos", 1, 0), &h->x, &h->y, &fc);
+    h->facing = P_int(par, k, "facing", 0, 1) < 0 ? -fc : fc;
+    h->alive = 1; h->ctrl = 0;
+    h->life = r->life; h->lifemax = r->lifemax; h->power = r->power; h->powermax = r->powermax;
+    h->xs = r->xs; h->ys = r->ys; h->autofit = r->autofit;
+    h->statetype = ST_S; h->movetype = MT_I; h->physics = PH_N;
+    h->buf_state = INT32_MIN;
+    h->ncfire = h->cd->nctrl;
+    h->fire_serial = calloc(h->ncfire ? h->ncfire : 1, sizeof(uint32_t));
+    h->fire_time = calloc(h->ncfire ? h->ncfire : 1, sizeof(int32_t));
+    if (!h->fire_serial || !h->fire_time) { helper_release(h); f->overflow++; return; }
+    set_anim(h, -1, 0, 0);
+    if (!enter_state(h, stateno, -1, -1)) helper_release(h);
+}
+
+static Explod *explod_slot(Fight *f)
+{
+    for (int i = 0; i < FIGHT_MAXEXPLOD; i++) if (!f->ex[i].on) return &f->ex[i];
+    f->overflow++;
+    return NULL;
+}
+
+static void effect_at(Fight *f, const Player *own, int anim, float x, float y, int facing)
+{
+    const AirAction *ac = anim >= 0 ? air_find(&own->cd->air, anim) : NULL;
+    if (!ac) return;
+    Explod *e = explod_slot(f);
+    if (!e) return;
+    memset(e, 0, sizeof *e);
+    e->on = 1; e->owner = own->idx; e->cd = own->cd; e->id = -1; e->x = x; e->y = y; e->facing = facing;
+    e->removetime = -2; e->xs = e->ys = 1.0f;
+    anim_start(&e->anim, &e->cd->air, ac, 0, 0);
+}
+
+static void spawn_explod(Fight *f, Player *p, const Ctrl *k)
+{
+    const char *ar = P_raw(p, k, "anim");
+    while (ar && *ar == ' ') ar++;
+    if (ar && (*ar == 'f' || *ar == 'F' || *ar == 's' || *ar == 'S')) return;     /* fight-fx / system animations: not available */
+    const AirAction *ac = air_find(&p->cd->air, P_int(p, k, "anim", 0, 0));
+    if (!ac) return;
+    Explod *e = explod_slot(f);
+    if (!e) return;
+    Player *r = root_of(p);
+    memset(e, 0, sizeof *e);
+    e->on = 1; e->owner = p->idx; e->cd = p->cd; e->id = P_int(p, k, "id", 0, -1);
+    e->postype = postype_of(P_raw(p, k, "postype"));
+    e->ox = P_flt(p, k, "pos", 0, 0); e->oy = P_flt(p, k, "pos", 1, 0);
+    int fc;
+    place(f, p, e->postype, e->ox, e->oy, &e->x, &e->y, &fc);
+    e->facing = P_int(p, k, "facing", 0, 1) < 0 ? -fc : fc;
+    e->bindtime = P_int(p, k, "bindtime", 0, 1);
+    e->vx = P_flt(p, k, "vel", 0, 0); e->vy = P_flt(p, k, "vel", 1, 0);
+    e->ax = P_flt(p, k, "accel", 0, 0); e->ay = P_flt(p, k, "accel", 1, 0);
+    e->removetime = P_int(p, k, "removetime", 0, -2);
+    e->sprpri = P_int(p, k, "sprpriority", 0, 0);
+    e->ontop = P_int(p, k, "ontop", 0, 0) != 0;
+    e->roh = P_int(p, k, "removeongethit", 0, 0) != 0;
+    e->xs = P_flt(p, k, "scale", 0, 1) * (r->autofit ? r->xs : 1.0f);
+    e->ys = P_flt(p, k, "scale", 1, 1) * (r->autofit ? r->ys : 1.0f);
+    anim_start(&e->anim, &e->cd->air, ac, 0, 0);
+}
+
+static void modify_explod(Fight *f, Player *p, const Ctrl *k)
+{
+    int id = P_int(p, k, "id", 0, -1);
+    for (int i = 0; i < FIGHT_MAXEXPLOD; i++) {
+        Explod *e = &f->ex[i];
+        if (!e->on || e->owner != p->idx || (id >= 0 && e->id != id)) continue;
+        if (P_has(p, k, "vel", 0)) e->vx = P_flt(p, k, "vel", 0, e->vx);
+        if (P_has(p, k, "vel", 1)) e->vy = P_flt(p, k, "vel", 1, e->vy);
+        if (P_has(p, k, "accel", 0)) e->ax = P_flt(p, k, "accel", 0, e->ax);
+        if (P_has(p, k, "accel", 1)) e->ay = P_flt(p, k, "accel", 1, e->ay);
+        if (P_has(p, k, "removetime", 0)) e->removetime = P_int(p, k, "removetime", 0, e->removetime);
+        if (P_has(p, k, "scale", 0)) e->xs = P_flt(p, k, "scale", 0, e->xs);
+        if (P_has(p, k, "scale", 1)) e->ys = P_flt(p, k, "scale", 1, e->ys);
+        if (P_has(p, k, "pos", 0)) e->ox = P_flt(p, k, "pos", 0, e->ox);
+        if (P_has(p, k, "pos", 1)) e->oy = P_flt(p, k, "pos", 1, e->oy);
+    }
+}
+
+static void spawn_proj(Fight *f, Player *p, const Ctrl *k)
+{
+    Proj *pr = NULL;
+    for (int i = 0; i < FIGHT_MAXPROJ; i++) if (!f->pr[i].on) { pr = &f->pr[i]; break; }
+    if (!pr) { f->overflow++; return; }
+    const AirAction *ac = air_find(&p->cd->air, P_int(p, k, "projanim", 0, 0));
+    if (!ac) return;
+    Player *r = root_of(p);
+    memset(pr, 0, sizeof *pr);
+    HitDef saved = p->hd; int sc = p->ctrl_cont;           /* the Projectile's own HitDef parameters, parsed like a HitDef */
+    p->ctrl_cont = 0; do_hitdef(p, k);
+    pr->hd = p->hd; p->hd = saved; p->ctrl_cont = sc;
+    int hits = P_int(p, k, "projhits", 0, 1); if (hits < 1) hits = 1;
+    pr->hd.hits_left = pr->hd.numhits = hits;
+    pr->on = 1; pr->owner = p->idx; pr->cd = p->cd; pr->id = P_int(p, k, "projid", 0, 0);
+    pr->remove = P_int(p, k, "projremove", 0, 1) != 0;
+    pr->removetime = P_int(p, k, "projremovetime", 0, -1);
+    pr->misstime = P_int(p, k, "projmisstime", 0, 0);
+    pr->sprpri = P_int(p, k, "projsprpriority", 0, 3);
+    pr->hitanim = P_int(p, k, "projhitanim", 0, -1);
+    pr->remanim = P_has(p, k, "projremanim", 0) ? P_int(p, k, "projremanim", 0, -1) : pr->hitanim;
+    int fc;
+    place(f, p, postype_of(P_raw(p, k, "postype")), P_flt(p, k, "offset", 0, 0), P_flt(p, k, "offset", 1, 0), &pr->x, &pr->y, &fc);
+    pr->facing = fc;
+    pr->vx = P_flt(p, k, "velocity", 0, 0); pr->vy = P_flt(p, k, "velocity", 1, 0);
+    pr->ax = P_flt(p, k, "accel", 0, 0); pr->ay = P_flt(p, k, "accel", 1, 0);
+    pr->xs = P_flt(p, k, "projscale", 0, 1) * (r->autofit ? r->xs : 1.0f);
+    pr->ys = P_flt(p, k, "projscale", 1, 1) * (r->autofit ? r->ys : 1.0f);
+    anim_start(&pr->anim, &pr->cd->air, ac, 0, 0);
+}
+
+static void parent_var(Player *p, const Ctrl *k, int add)
+{
+    Player *t = p->parent;
+    if (!t) return;
+    const Param *vp = prm(k, "value");
+    Val v = (vp && vp->ne > 0 && vp->e[0]) ? peval(p, vp->e[0]) : vI(0);
+    if (v.bad) return;
+    int iv = P_has(p, k, "v", 0) ? P_int(p, k, "v", 0, -1) : -1;
+    int fv = P_has(p, k, "fv", 0) ? P_int(p, k, "fv", 0, -1) : -1;
+    if (iv >= 0 && iv < FIGHT_NVAR) t->var[iv] = add ? t->var[iv] + (int32_t)v.d : (int32_t)v.d;
+    if (fv >= 0 && fv < FIGHT_NFVAR) t->fvar[fv] = add ? t->fvar[fv] + (float)v.d : (float)v.d;
+}
+
+static void do_bind(Player *p, const Ctrl *k, int mode)
+{
+    if (!p->is_helper) return;
+    p->bindmode = mode;
+    p->bindtime = P_int(p, k, "time", 0, 1);
+    p->bindface = P_int(p, k, "facing", 0, 0);
+    p->bind_ox = P_flt(p, k, "pos", 0, 0); p->bind_oy = P_flt(p, k, "pos", 1, 0);
+    apply_bind(p, 0);
+}
+
 static int run_ctrl(Fight *f, Player *p, const Ctrl *k)
 {
     Player *q = opp(p);
@@ -590,11 +835,24 @@ static int run_ctrl(Fight *f, Player *p, const Ctrl *k)
     case SC_TARGETVELADD: if (p->ntarget > 0) { if (P_has(p, k, "x", 0)) q->vx += P_flt(p, k, "x", 0, 0); if (P_has(p, k, "y", 0)) q->vy += P_flt(p, k, "y", 0, 0); } break;
     case SC_TARGETPOWERADD: if (p->ntarget > 0) { q->power += P_int(p, k, "value", 0, 0); clampvar(q); } break;
     case SC_TARGETBIND: if (p->ntarget > 0) { float px = P_flt(p, k, "pos", 0, 0), py = P_flt(p, k, "pos", 1, 0); q->x = p->x + px * (float)p->facing; q->y = p->y + py; } break;
+    case SC_HELPER: spawn_helper(f, p, k); break;
+    case SC_DESTROYSELF: if (p->is_helper) p->dead = 1; break;
+    case SC_EXPLOD: spawn_explod(f, p, k); break;
+    case SC_REMOVEEXPLOD: {
+        int id = P_int(p, k, "id", 0, -1);
+        for (int i = 0; i < FIGHT_MAXEXPLOD; i++) if (f->ex[i].on && f->ex[i].owner == p->idx && (id < 0 || f->ex[i].id == id)) f->ex[i].on = 0;
+        break; }
+    case SC_MODIFYEXPLOD: modify_explod(f, p, k); break;
+    case SC_PROJECTILE: spawn_proj(f, p, k); break;
+    case SC_BINDTOPARENT: do_bind(p, k, 1); break;
+    case SC_BINDTOROOT: do_bind(p, k, 2); break;
+    case SC_PARENTVARSET: parent_var(p, k, 0); break;
+    case SC_PARENTVARADD: parent_var(p, k, 1); break;
     case SC_ASSERTSPECIAL: case SC_NULL:
     /* accepted and deliberately ignored: visual / sound / bookkeeping only */
     case SC_PLAYSND: case SC_STOPSND: case SC_WIDTH: case SC_SCREENBOUND: case SC_AFTERIMAGE: case SC_AFTERIMAGETIME:
-    case SC_PALFX: case SC_ALLPALFX: case SC_PAUSE: case SC_SUPERPAUSE: case SC_EXPLOD: case SC_REMOVEEXPLOD:
-    case SC_MODIFYEXPLOD: case SC_ENVSHAKE: case SC_ENVCOLOR: case SC_NOTHITBY: case SC_HITBY: case SC_HITOVERRIDE:
+    case SC_PALFX: case SC_ALLPALFX: case SC_PAUSE: case SC_SUPERPAUSE:
+    case SC_ENVSHAKE: case SC_ENVCOLOR: case SC_NOTHITBY: case SC_HITBY: case SC_HITOVERRIDE:
     case SC_REVERSALDEF: case SC_MAKEDUST: case SC_OFFSET: case SC_PLAYERPUSH: case SC_TRANS: case SC_REMAPPAL:
     case SC_DEFENCEMULSET: case SC_FALLENVSHAKE: case SC_HITFALLDAMAGE: case SC_HITFALLSET: case SC_HITFALLVEL:
     case SC_MOVEHITRESET: case SC_HITADD: case SC_TARGETDROP:
@@ -655,7 +913,7 @@ static void physics(Fight *f, Player *p)
     if ((p->physics == PH_S || p->physics == PH_C) && p->y > 0) p->y = 0;
     /* landing: falling, at or below the floor. Hit-reaction states handle their own landing (Ikemen exempts
      * state 105, the back dash, the same way). */
-    if (p->physics == PH_A && p->vy > 0 && p->y >= 0 && p->stateno != 105 && p->movetype != MT_H) {
+    if (!p->is_helper && p->physics == PH_A && p->vy > 0 && p->y >= 0 && p->stateno != 105 && p->movetype != MT_H) {
         p->y = 0; p->vy = 0;
         enter_state(p, 52, 0, -1);
     }
@@ -697,6 +955,17 @@ static void player_action(Fight *f, Player *p)
     if (!paused) physics(f, p);
 }
 
+static void helper_action(Fight *f, Player *h)
+{
+    int paused = is_paused(h);
+    h->buf_state = INT32_MIN;
+    for (int hops = 0; hops < MAX_STATE_CHAIN; hops++) {
+        if (!run_state_block(f, h, h->stateno, paused)) break;
+        if (!apply_buffered(h)) break;
+    }
+    if (!h->dead && !paused) { physics(f, h); apply_bind(h, 1); }
+}
+
 /* paused0: whether the player was already paused when this tick began. A hit made during this tick must not freeze
  * the tick it happened in: its time and animation still advance, otherwise "Time = 0" / "AnimElem = n" attack
  * triggers would still be true when the pause ends and the HitDef would fire (and hit) again. */
@@ -709,6 +978,9 @@ static void player_post(Fight *f, Player *p, int paused0)
         if (p->movecontact > 0) p->movecontact++;
         if (p->movehit > 0) p->movehit++;
         if (p->moveguarded > 0) p->moveguarded++;
+        if (p->pj_contact > 0) p->pj_contact++;
+        if (p->pj_hit > 0) p->pj_hit++;
+        if (p->pj_guard > 0) p->pj_guard++;
     } else if (p->pause > 0) p->pause--;
     if (p->shake > 0) { if (paused0) p->shake--; }
     else if (p->hit_time > 0) p->hit_time--;
@@ -718,14 +990,30 @@ static void player_post(Fight *f, Player *p, int paused0)
 /* ============================================================================================ hits */
 typedef struct { float x1, y1, x2, y2; } Rect;
 
-static Rect world_box(const Player *p, const AirFrame *fr, const Box *b)
+static Rect box_at(float x, float y, int facing, float xs, float ys, const AirFrame *fr, const Box *b)
 {
-    float d = (float)(p->facing * fr->hflip);
+    float d = (float)(facing * fr->hflip);
     Rect r;
-    float xa = p->x + d * b->x1 * p->xs, xb = p->x + d * b->x2 * p->xs;
+    float xa = x + d * b->x1 * xs, xb = x + d * b->x2 * xs;
     r.x1 = xa < xb ? xa : xb; r.x2 = xa < xb ? xb : xa;
-    r.y1 = p->y + b->y1 * p->ys; r.y2 = p->y + b->y2 * p->ys;
+    r.y1 = y + b->y1 * ys; r.y2 = y + b->y2 * ys;
     return r;
+}
+static Rect world_box(const Player *p, const AirFrame *fr, const Box *b) { return box_at(p->x, p->y, p->facing, p->xs, p->ys, fr, b); }
+
+/* do the attack boxes of a frame drawn at (x, y) touch the defender's hurt boxes? (projectiles) */
+static int frame_touch(const CharData *cd, const AirFrame *fr, float x, float y, int facing, float xs, float ys, const Player *d)
+{
+    const AirFrame *fd = cur_frame(d);
+    if (!fr || !fd || !fr->nclsn1 || !fd->nclsn2) return 0;
+    for (int i = 0; i < fr->nclsn1; i++) {
+        Rect ra = box_at(x, y, facing, xs, ys, fr, &cd->air.boxes[fr->clsn1 + (uint32_t)i]);
+        for (int j = 0; j < fd->nclsn2; j++) {
+            Rect rd = world_box(d, fd, &d->cd->air.boxes[fd->clsn2 + (uint32_t)j]);
+            if (ra.x1 < rd.x2 && rd.x1 < ra.x2 && ra.y1 < rd.y2 && rd.y1 < ra.y2) return 1;
+        }
+    }
+    return 0;
 }
 
 static int boxes_touch(const Player *a, const Player *d)
@@ -742,11 +1030,19 @@ static int boxes_touch(const Player *a, const Player *d)
     return 0;
 }
 
+static int hit_flags_ok(const HitDef *h, const Player *d);
+
 static int can_hit(const Player *a, const Player *d)
 {
     const HitDef *h = &a->hd;
     if (!h->on || h->hits_left <= 0 || a->movetype != MT_A || a->pause > 0 || a->shake > 0) return 0;
     if (!(h->st & stbit(a->statetype))) return 0;
+    if (!hit_flags_ok(h, d)) return 0;
+    return boxes_touch(a, d);
+}
+
+static int hit_flags_ok(const HitDef *h, const Player *d)
+{
     int need;                                    /* hitflag bit the defender's situation requires */
     if (d->statetype == ST_L) need = 16;         /* D */
     else if (d->statetype == ST_A) need = d->fall ? 8 : 4;
@@ -755,7 +1051,7 @@ static int can_hit(const Player *a, const Player *d)
         if (!(d->statetype == ST_A && d->fall && (h->hitflag & 4))) return 0;   /* falling players also count as air */
         if (!(h->hitflag & 8)) return 0;
     }
-    return boxes_touch(a, d);
+    return 1;
 }
 
 static int guarding(const Player *d, const HitDef *h)
@@ -771,19 +1067,19 @@ static int guarding(const Player *d, const HitDef *h)
     return (h->guardflag & 3) != 0;
 }
 
-static void apply_hit(Fight *f, Player *a, Player *d)
+static void apply_hit(Fight *f, Player *a, Player *d, HitDef *h, int afacing, int proj)
 {
-    HitDef *h = &a->hd;
+    Player *own = root_of(a);
     int g = guarding(d, h);
     int dmg = g ? h->gdamage : h->damage;
     d->life -= dmg;
     clampvar(d);
-    a->power += h->getpower; d->power += h->givepower; clampvar(a); clampvar(d);
+    own->power += h->getpower; d->power += h->givepower; clampvar(own); clampvar(d);
     int killed = d->life <= 0;
     if (killed && !(g ? h->guard_kill : h->kill)) { d->life = 1; killed = 0; }
     if (killed) d->alive = 0;
 
-    d->facing = -a->facing;                       /* the victim turns to face the attacker */
+    d->facing = -afacing;                       /* the victim turns to face the attacker */
     int airborne = d->statetype == ST_A;
     int to;
     d->gh_damage = dmg; d->gh_guarded = g; d->gh_slide = 0;
@@ -793,11 +1089,11 @@ static void apply_hit(Fight *f, Player *a, Player *d)
     if (g) {
         to = airborne ? 152 : (d->statetype == ST_C ? 151 : 150);
         vx = h->guardvx; vy = 0; d->hit_time = h->gghittime;
-        d->shake = h->gp2shake; a->pause = h->gp1pause;
+        d->shake = h->gp2shake; if (!proj) a->pause = h->gp1pause;
         if (airborne) vy = d->vy;
         d->fall = 0;
     } else {
-        d->shake = h->p2shake; a->pause = h->p1pause;
+        d->shake = h->p2shake; if (!proj) a->pause = h->p1pause;
         if (airborne) { to = 5020; vx = h->avx; vy = h->avy; d->hit_time = h->ahittime; }
         else if (h->gvy < 0 || h->fall) { to = 5020; vx = h->gvx; vy = h->gvy < 0 ? h->gvy : -3.0f; d->hit_time = h->ghittime; }
         else { to = d->statetype == ST_C ? 5010 : 5000; vx = h->gvx; vy = 0; d->hit_time = h->ghittime; }
@@ -808,19 +1104,73 @@ static void apply_hit(Fight *f, Player *a, Player *d)
     d->hd.on = 0;                                  /* being hit cancels the victim's own attack */
     d->ntarget = 0;
 
-    a->movecontact = 1;
-    if (g) a->moveguarded = 1; else a->movehit = 1;
-    a->hitcount++;
-    a->ntarget = 1;
+    if (!proj) {
+        a->movecontact = 1;
+        if (g) a->moveguarded = 1; else a->movehit = 1;
+        a->hitcount++;
+        a->ntarget = 1;
+    }
+    for (int i = 0; i < FIGHT_MAXEXPLOD; i++) if (f->ex[i].on && f->ex[i].roh && f->ex[i].owner == d->idx) f->ex[i].on = 0;
     h->hits_left--;
-    (void)f;
 }
 
 static void resolve_hits(Fight *f)
 {
-    int hit[2];
-    for (int i = 0; i < 2; i++) hit[i] = can_hit(&f->p[i], &f->p[i ^ 1]);
-    for (int i = 0; i < 2; i++) if (hit[i]) apply_hit(f, &f->p[i], &f->p[i ^ 1]);
+    Player *att[2 + FIGHT_MAXHELPER]; int hit[2 + FIGHT_MAXHELPER]; int na = 0;
+    att[na++] = &f->p[0]; att[na++] = &f->p[1];
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) if (f->h[i].live) att[na++] = &f->h[i];
+    for (int i = 0; i < na; i++) hit[i] = can_hit(att[i], &f->p[att[i]->idx ^ 1]);
+    for (int i = 0; i < na; i++) if (hit[i]) apply_hit(f, att[i], &f->p[att[i]->idx ^ 1], &att[i]->hd, att[i]->facing, 0);
+    for (int i = 0; i < FIGHT_MAXPROJ; i++) {
+        Proj *pr = &f->pr[i];
+        if (!pr->on || pr->cool > 0 || pr->hd.hits_left <= 0) continue;
+        Player *o = &f->p[pr->owner], *d = &f->p[pr->owner ^ 1];
+        if (!hit_flags_ok(&pr->hd, d)) continue;
+        if (!frame_touch(pr->cd, anim_frame(&pr->anim), pr->x, pr->y, pr->facing, pr->xs, pr->ys, d)) continue;
+        apply_hit(f, o, d, &pr->hd, pr->facing, 1);
+        o->pj_id = pr->id; o->pj_contact = 1;
+        if (d->gh_guarded) o->pj_guard = 1; else o->pj_hit = 1;
+        if (pr->hd.hits_left <= 0) {
+            if (pr->remove) { effect_at(f, o, pr->hitanim, pr->x, pr->y, pr->facing); pr->on = 0; }
+        } else pr->cool = pr->misstime > 0 ? pr->misstime : 1;
+    }
+}
+
+static void proj_update(Fight *f)
+{
+    float edge = (FIGHT_LOCAL_W / 2 + 40) * f->cs;
+    for (int i = 0; i < FIGHT_MAXPROJ; i++) {
+        Proj *pr = &f->pr[i];
+        if (!pr->on) continue;
+        pr->time++;
+        pr->x += pr->vx * (float)pr->facing; pr->y += pr->vy;
+        pr->vx += pr->ax; pr->vy += pr->ay;
+        if (pr->cool > 0) pr->cool--;
+        anim_tick(&pr->anim);
+        if ((pr->removetime >= 0 && pr->time >= pr->removetime) || pr->x > f->camx + edge || pr->x < f->camx - edge || pr->time > 1800) {
+            effect_at(f, &f->p[pr->owner], pr->remanim, pr->x, pr->y, pr->facing);
+            pr->on = 0;
+        }
+    }
+}
+
+static void explod_update(Fight *f)
+{
+    for (int i = 0; i < FIGHT_MAXEXPLOD; i++) {
+        Explod *e = &f->ex[i];
+        if (!e->on) continue;
+        e->time++;
+        if (e->bindtime != 0) {
+            const Player *own = &f->p[e->owner];
+            e->ox += e->vx; e->oy += e->vy;
+            int fc;
+            place(f, own, e->postype, e->ox, e->oy, &e->x, &e->y, &fc);
+            if (e->bindtime > 0) e->bindtime--;
+        } else { e->x += e->vx * (float)e->facing; e->y += e->vy; }
+        e->vx += e->ax; e->vy += e->ay;
+        anim_tick(&e->anim);
+        if ((e->removetime >= 0 && e->time >= e->removetime) || (e->removetime == -2 && e->anim.loopend) || e->time > 7200) e->on = 0;
+    }
 }
 
 /* ============================================================================================ world */
@@ -872,7 +1222,7 @@ static void autofit(Player *p, float cs)
 int fight_init(Fight *f, const CharData *c1, const CharData *c2)
 {
     memset(f, 0, sizeof *f);
-    f->rng = 12345;
+    f->rng = 12345; f->next_pid = 2000;
     f->cs = c1->coord_w > 0 ? (float)c1->coord_w / 320.0f : 1.0f;      /* character units per stage unit */
     if (f->cs < 0.25f) f->cs = 0.25f;
     if (f->cs > 8.0f) f->cs = 8.0f;
@@ -881,7 +1231,7 @@ int fight_init(Fight *f, const CharData *c1, const CharData *c2)
     const CharData *cds[2] = { c1, c2 };
     for (int i = 0; i < 2; i++) {
         Player *p = &f->p[i];
-        p->f = f; p->cd = cds[i]; p->idx = i;
+        p->f = f; p->cd = cds[i]; p->idx = i; p->pid = 1000 + i;
         p->facing = i == 0 ? 1 : -1;
         p->x = (i == 0 ? -70.0f : 70.0f) * f->cs;
         p->alive = 1; p->ctrl = 1;
@@ -911,6 +1261,8 @@ void fight_free(Fight *f)
         cmdstate_free(&p->cs);
         p->fire_serial = NULL; p->fire_time = NULL;
     }
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) { free(f->h[i].fire_serial); free(f->h[i].fire_time); memset(&f->h[i], 0, sizeof f->h[i]); }
+    memset(f->ex, 0, sizeof f->ex); memset(f->pr, 0, sizeof f->pr);
 }
 
 void fight_set_stage(Fight *f, const char *def_path)
@@ -935,10 +1287,21 @@ void fight_tick(Fight *f, uint16_t raw1, uint16_t raw2)
     f->p[0].raw = raw1; f->p[1].raw = raw2;
     for (int i = 0; i < 2; i++) cmdstate_tick(&f->p[i].cs, to_rel(&f->p[i], f->p[i].raw));
     for (int i = 0; i < 2; i++) player_action(f, &f->p[i]);
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) {              /* helpers run after both players, in creation slots */
+        Player *h = &f->h[i];
+        if (!h->live) continue;
+        helper_action(f, h);
+        if (h->dead) helper_release(h);
+    }
     int paused0[2] = { is_paused(&f->p[0]), is_paused(&f->p[1]) };
+    int hpaused[FIGHT_MAXHELPER];
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) hpaused[i] = f->h[i].live ? is_paused(&f->h[i]) : 0;
     resolve_hits(f);
     world(f);
     for (int i = 0; i < 2; i++) player_post(f, &f->p[i], paused0[i]);
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) if (f->h[i].live) player_post(f, &f->h[i], hpaused[i]);
+    proj_update(f);
+    explod_update(f);
 }
 
 /* ============================================================================================ drawing */
@@ -963,26 +1326,43 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
     gfx_rect(0, SY(0), w, h - SY(0), 0xFF3A3028);
     gfx_rect(0, SY(0), w, S, 0xFF605040);
 
-    /* draw lower sprite priority first */
-    int order[2] = { 0, 1 };
-    if (f->p[1].sprpriority < f->p[0].sprpriority) { order[0] = 1; order[1] = 0; }
-    for (int n = 0; n < 2; n++) {
-        const Player *p = &f->p[order[n]];
-        gfx_rect(SX(p->x) - 14 * S, SY(0) - S, 28 * S, 2 * S, 0xFF201810);          /* shadow */
-        const AirFrame *fr = cur_frame(p);
-        if (!fr || fr->group < 0 || !p->cd->sff_ok) continue;
-        const Sprite *sp = sff_find(&p->cd->sff, fr->group, fr->image);
+    /* everything that is drawn, sorted by sprite priority (stable: players, helpers, projectiles, explods) */
+    struct { int kind, idx, prio; } di[2 + FIGHT_MAXHELPER + FIGHT_MAXPROJ + FIGHT_MAXEXPLOD];
+    int nd = 0;
+#define ADD(k, i, pr) do { int q_ = nd++; while (q_ > 0 && di[q_ - 1].prio > (pr)) { di[q_] = di[q_ - 1]; q_--; } di[q_].kind = (k); di[q_].idx = (i); di[q_].prio = (pr); } while (0)
+    for (int i = 0; i < 2; i++) ADD(0, i, f->p[i].sprpriority);
+    for (int i = 0; i < FIGHT_MAXHELPER; i++) if (f->h[i].live) ADD(1, i, f->h[i].sprpriority);
+    for (int i = 0; i < FIGHT_MAXPROJ; i++) if (f->pr[i].on) ADD(2, i, f->pr[i].sprpri);
+    for (int i = 0; i < FIGHT_MAXEXPLOD; i++) if (f->ex[i].on) ADD(3, i, f->ex[i].ontop ? 100000 : f->ex[i].sprpri);
+#undef ADD
+    for (int n = 0; n < nd; n++) {
+        const CharData *cd; const AirFrame *fr; float x, y, xs, ys; int fc;
+        if (di[n].kind <= 1) {
+            const Player *p = di[n].kind == 0 ? &f->p[di[n].idx] : &f->h[di[n].idx];
+            if (!p->is_helper) gfx_rect(SX(p->x) - 14 * S, SY(0) - S, 28 * S, 2 * S, 0xFF201810);      /* shadow */
+            cd = p->cd; fr = cur_frame(p); x = p->x; y = p->y; xs = p->xs; ys = p->ys; fc = p->facing;
+        } else if (di[n].kind == 2) {
+            const Proj *q = &f->pr[di[n].idx];
+            cd = q->cd; fr = anim_frame(&q->anim); x = q->x; y = q->y; xs = q->xs; ys = q->ys; fc = q->facing;
+        } else {
+            const Explod *q = &f->ex[di[n].idx];
+            cd = q->cd; fr = anim_frame(&q->anim); x = q->x; y = q->y; xs = q->xs; ys = q->ys; fc = q->facing;
+        }
+        if (!fr || fr->group < 0 || !cd->sff_ok) continue;
+        const Sprite *sp = sff_find(&cd->sff, fr->group, fr->image);
         if (!sp || !sp->px) continue;
-        const uint32_t *pal = sff_palette(&p->cd->sff, sp);
+        const uint32_t *pal = sff_palette(&cd->sff, sp);
         if (!pal) continue;
-        int ax = SX(p->x + (float)(p->facing * fr->xoff) * p->xs), ay = SY(p->y + (float)fr->yoff * p->ys);
+        int ax = SX(x + (float)(fc * fr->xoff) * xs), ay = SY(y + (float)fr->yoff * ys);
         float fxs = fr->xscale > 0.0f ? fr->xscale : 1.0f, fys = fr->yscale > 0.0f ? fr->yscale : 1.0f;
-        sprite_blit_scaled2(sp, pal, fb, w, h, ax, ay, (float)S / f->cs * p->xs * fxs, (float)S / f->cs * p->ys * fys,
-                            (p->facing * fr->hflip) < 0);
+        sprite_blit_scaled2(sp, pal, fb, w, h, ax, ay, (float)S / f->cs * xs * fxs, (float)S / f->cs * ys * fys, (fc * fr->hflip) < 0);
     }
     if (f->show_boxes) {
-        for (int i = 0; i < 2; i++) {
-            const Player *p = &f->p[i];
+        const Player *bp[2 + FIGHT_MAXHELPER]; int nb = 0;
+        bp[nb++] = &f->p[0]; bp[nb++] = &f->p[1];
+        for (int i = 0; i < FIGHT_MAXHELPER; i++) if (f->h[i].live) bp[nb++] = &f->h[i];
+        for (int i = 0; i < nb; i++) {
+            const Player *p = bp[i];
             const AirFrame *fr = cur_frame(p);
             if (!fr) continue;
             for (int k = 0; k < fr->nclsn2; k++) {
@@ -991,6 +1371,15 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
             }
             for (int k = 0; k < fr->nclsn1; k++) {
                 Rect r = world_box(p, fr, &p->cd->air.boxes[fr->clsn1 + (uint32_t)k]);
+                outline(SX(r.x1), SY(r.y1), SX(r.x2) - SX(r.x1), SY(r.y2) - SY(r.y1), 0xFFFF4040);
+            }
+        }
+        for (int i = 0; i < FIGHT_MAXPROJ; i++) {
+            const Proj *q = &f->pr[i];
+            const AirFrame *fr = q->on ? anim_frame(&q->anim) : NULL;
+            if (!fr) continue;
+            for (int k = 0; k < fr->nclsn1; k++) {
+                Rect r = box_at(q->x, q->y, q->facing, q->xs, q->ys, fr, &q->cd->air.boxes[fr->clsn1 + (uint32_t)k]);
                 outline(SX(r.x1), SY(r.y1), SX(r.x2) - SX(r.x1), SY(r.y2) - SY(r.y1), 0xFFFF4040);
             }
         }
@@ -1012,6 +1401,12 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
     char t[128];
     const Player *p = &f->p[0];
     snprintf(t, sizeof t, "STATE %d  ANIM %d  TIME %d  CTRL %d", p->stateno, p->animno, p->time, p->ctrl);
+    { int nh = 0, ne = 0, np = 0;
+      for (int i = 0; i < FIGHT_MAXHELPER; i++) nh += f->h[i].live;
+      for (int i = 0; i < FIGHT_MAXEXPLOD; i++) ne += f->ex[i].on;
+      for (int i = 0; i < FIGHT_MAXPROJ; i++) np += f->pr[i].on;
+      size_t tl = strlen(t);
+      snprintf(t + tl, sizeof t - tl, "  H%d E%d P%d", nh, ne, np); }
     gfx_text(30, h - 70, 2, 0xFFE0E0E0, t);
     char act[128]; act[0] = 0; size_t n = 0;
     for (int i = 0; i < p->cd->cmd.n && n < 100; i++) {

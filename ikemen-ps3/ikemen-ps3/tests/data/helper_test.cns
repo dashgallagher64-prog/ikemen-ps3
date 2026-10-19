@@ -1,0 +1,83 @@
+; injected by tests/run_engine.sh: exercises Helper, Explod, Projectile and the redirects (KFM uses none of them)
+[Statedef -2]
+
+[State -2, helper]
+type = Helper
+triggerall = TeamSide = 1
+trigger1 = GameTime = 20
+stateno = 9100
+pos = 30, -50
+id = 77
+
+[State -2, read helper time]
+type = VarSet
+triggerall = TeamSide = 1
+trigger1 = NumHelper(77) = 1
+v = 7
+value = helper(77), Time
+
+[State -2, explod]
+type = Explod
+triggerall = TeamSide = 1
+trigger1 = GameTime = 30
+anim = 0
+id = 5
+pos = 0, -60
+removetime = 20
+
+[State -2, projectile]
+type = Projectile
+triggerall = TeamSide = 1
+trigger1 = GameTime = 60
+projid = 3
+projanim = 9500
+velocity = 4, 0
+offset = 20, -50
+attr = S, NP
+damage = 33, 0
+hitflag = MAF
+pausetime = 0, 0
+ground.hittime = 12
+
+[State -2, count]
+type = VarSet
+triggerall = TeamSide = 1
+trigger1 = GameTime = 25
+v = 8
+value = NumExplod + NumProj + 10 * NumHelper
+
+[Statedef 9100]
+type = S
+physics = N
+movetype = A
+anim = 9500
+
+[State 9100, hit]
+type = HitDef
+trigger1 = Time = 0
+attr = S, NA
+damage = 17, 0
+hitflag = MAF
+pausetime = 0, 0
+ground.hittime = 12
+
+[State 9100, vel]
+type = VelSet
+trigger1 = Time = 0
+x = 1
+
+[State 9100, tell parent]
+type = ParentVarSet
+trigger1 = Time = 3
+v = 5
+value = 99
+
+[State 9100, rootdist]
+type = ParentVarSet
+trigger1 = Time = 4 && IsHelper = 1 && ParentDist X < 0
+v = 6
+value = 1
+
+[State 9100, gone]
+type = DestroySelf
+trigger1 = Time = 30

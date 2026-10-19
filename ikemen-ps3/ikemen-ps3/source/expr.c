@@ -521,6 +521,20 @@ Val expr_eval(const Expr *e, const ExprCtx *c)
 }
 
 /* ---------------------------------------------------------------------------- list splitting */
+/* "Parent," or "Helper(3)," so far: the comma belongs to the redirect ("value = Parent, Var(3)"), not to the list */
+static int only_redirect(const char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    char w[16]; int n = 0;
+    while (((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z')) && n < 15) { w[n++] = (char)((*s >= 'A' && *s <= 'Z') ? *s + 32 : *s); s++; }
+    w[n] = 0;
+    if (!n || !redirect_kind(w)) return 0;
+    while (*s == ' ' || *s == '\t') s++;
+    if (*s == '(') { int d = 0; for (; *s; s++) { if (*s == '(') d++; else if (*s == ')' && --d == 0) { s++; break; } } if (d) return 0; }
+    while (*s == ' ' || *s == '\t') s++;
+    return *s == 0;
+}
+
 int expr_split(const char *src, char out[][EXPR_MAX_SRC], int max)
 {
     int n = 0, depth = 0, quote = 0;
@@ -530,6 +544,7 @@ int expr_split(const char *src, char out[][EXPR_MAX_SRC], int max)
     for (const char *p = src; ; p++) {
         char ch = *p;
         int split = (ch == ',' && !depth && !quote) || ch == 0;
+        if (split && ch == ',') { out[n][k] = 0; if (only_redirect(out[n])) split = 0; }
         if (split) {
             out[n][k] = 0;
             char *s = out[n];

@@ -563,3 +563,5 @@ int expr_split(const char *src, char out[][EXPR_MAX_SRC], int max)
     }
     return n;
 }
+
+const char *expr_trigger_name(int id) { return id >= 0 && id < TG_COUNT ? TRIGS[id].name : "?"; }

@@ -147,11 +147,12 @@ int main(void)
         int up = b.up && !prev.up, down = b.down && !prev.down;
         int ok = b.cross && !prev.cross, back = b.circle && !prev.circle;
         if (fight_on) {
-            if (b.l2 && !prev.l2) { if (log) { fprintf(log, "L2 pressed: leaving the fight\n"); fflush(log); } fight_free(&fight); chardata_free(&cd); cd_ok = 0; fight_on = 0; screen = 2; }
+            if (b.l2 && !prev.l2) { if (log) { fprintf(log, "L2 pressed: leaving the fight\n"); fight_report(&fight, log); } fight_free(&fight); chardata_free(&cd); cd_ok = 0; fight_on = 0; screen = 2; }
             else {
-                if (b.l1 && !prev.l1) { fight_free(&fight); fight_init(&fight, &cd, &cd); if (stages.n) fight_set_stage(&fight, stages.e[sels].def); }
+                if (b.l1 && !prev.l1) { fight_report(&fight, log); fight_free(&fight); fight_init(&fight, &cd, &cd); if (stages.n) fight_set_stage(&fight, stages.e[sels].def); }
                 if (b.select && !prev.select) fight.show_boxes = !fight.show_boxes;
                 fight_tick(&fight, b.fight, 0);
+                if (fight.tick == 600 || fight.tick == 3600) fight_report(&fight, log);
             }
             prev = b;
             uint32_t *fb = gfx_begin();

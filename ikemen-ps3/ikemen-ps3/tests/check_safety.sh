@@ -31,6 +31,7 @@ for f in source/*.c; do
     strip "$f" | grep -nE '(^|[^A-Za-z0-9_])(fwrite|fputs|fputc|putc|fprintf|vfprintf|write|pwrite|fflush)[[:space:]]*\(' | while IFS= read -r line; do
         case "$f:$line" in
             source/main.c:*'(log,'*|source/main.c:*'(log)'*) ;;
+            source/fight.c:*'(g_log,'*|source/fight.c:*'(g_log)'*|source/fight.c:*'(log,'*|source/fight.c:*'(log)'*) ;;   # the log handle main.c passes in
             *) echo "SAFETY FAIL: $f writes somewhere other than the log: $line"; exit 1 ;;
         esac
     done || bad=1

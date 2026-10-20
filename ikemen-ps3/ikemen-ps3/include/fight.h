@@ -103,6 +103,7 @@ struct Fight {
     Player  h[FIGHT_MAXHELPER];
     Explod  ex[FIGHT_MAXEXPLOD];
     Proj    pr[FIGHT_MAXPROJ];
+    int untrig[TG_COUNT];            /* triggers we answered with 0 because they are not implemented */
     int next_pid, overflow;          /* overflow: helpers/explods/projectiles dropped because a pool was full */
 };
 
@@ -110,6 +111,7 @@ int  fight_init(Fight *f, const CharData *c1, const CharData *c2);
 void fight_free(Fight *f);
 void fight_set_stage(Fight *f, const char *def_path);       /* optional: bounds from a stage .def */
 void fight_tick(Fight *f, uint16_t raw1, uint16_t raw2);    /* one game tick (60 per second) */
+void fight_report(const Fight *f, FILE *log);                   /* what this fight needed that we do not have yet */
 void fight_draw(const Fight *f, uint32_t *fb, int w, int h);
 
 #endif

@@ -60,6 +60,8 @@ enum {
 };
 
 /* redirect kinds for "P2, Life", "Target, Life", "Helper(3), Pos X" ... */
+const char *expr_trigger_name(int id);
+
 enum { RD_P2 = 1, RD_PARENT, RD_ROOT, RD_HELPER, RD_ENEMY, RD_TARGET, RD_PARTNER, RD_ENEMYNEAR, RD_PLAYERID, RD_SELF };
 /* var assignment kinds */
 enum { AS_VAR = 0, AS_FVAR, AS_SYSVAR, AS_SYSFVAR };

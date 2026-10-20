@@ -326,7 +326,7 @@ static Val pget(void *ud, int id, const Val *a, int n, const char *s)
     case TG_GETHITVARFALL: return ghv(p, s ? s : "");
     case TG_COMMAND: return vI(s ? is_cmd(p, s) : 0);
     case TG_HITDEFATTR: return vI(hd_encode(p));
-    default: break;
+    default: if (id > 0 && id < TG_COUNT) f->untrig[id]++; break;
     }
     return vI(0);
 }
@@ -561,6 +561,24 @@ static void place(const Fight *f, const Player *par, int pt, float px, float py,
     *facing = fc;
 }
 
+static int g_nlog;
+static int g_missing[24][3], g_nmissing;                /* sprites an animation asked for that the SFF does not have */
+static void log_spawn(const char *what, const CharData *cd, int anim, float x, float y, float xs, float ys, int a, int b)
+{
+    if (!g_log || g_nlog >= 60) return;
+    g_nlog++;
+    const AirAction *ac = air_find(&cd->air, anim);
+    int w = 0, h = 0, gr = -1, im = -1;
+    if (ac && ac->nframes > 0 && cd->sff_ok) {
+        const AirFrame *fr = &cd->air.frames[ac->first];
+        gr = fr->group; im = fr->image;
+        const Sprite *sp = sff_find(&cd->sff, gr, im);
+        if (sp) { w = sp->w; h = sp->h; }
+    }
+    fprintf(g_log, "  %s: anim %d (first sprite %d,%d = %dx%d) at %.0f,%.0f scale %.2f x %.2f  [%d %d]\n", what, anim, gr, im, w, h, x, y, xs, ys, a, b);
+    fflush(g_log);
+}
+
 static void helper_release(Player *h)
 {
     free(h->fire_serial); free(h->fire_time);
@@ -602,7 +620,8 @@ static void spawn_helper(Fight *f, Player *par, const Ctrl *k)
     h->fire_time = calloc(h->ncfire ? h->ncfire : 1, sizeof(int32_t));
     if (!h->fire_serial || !h->fire_time) { helper_release(h); f->overflow++; return; }
     set_anim(h, -1, 0, 0);
-    if (!enter_state(h, stateno, -1, -1)) helper_release(h);
+    if (!enter_state(h, stateno, -1, -1)) { helper_release(h); return; }
+    log_spawn("helper", h->cd, h->animno, h->x, h->y, h->xs, h->ys, stateno, h->hid);
 }
 
 static Explod *explod_slot(Fight *f)
@@ -651,6 +670,7 @@ static void spawn_explod(Fight *f, Player *p, const Ctrl *k)
     e->xs = P_flt(p, k, "scale", 0, 1) * (r->autofit ? r->xs : 1.0f);
     e->ys = P_flt(p, k, "scale", 1, 1) * (r->autofit ? r->ys : 1.0f);
     anim_start(&e->anim, &e->cd->air, ac, 0, 0);
+    log_spawn("explod", e->cd, ac->no, e->x, e->y, e->xs, e->ys, e->id, e->removetime);
 }
 
 static void modify_explod(Fight *f, Player *p, const Ctrl *k)
@@ -700,6 +720,7 @@ static void spawn_proj(Fight *f, Player *p, const Ctrl *k)
     pr->xs = P_flt(p, k, "projscale", 0, 1) * (r->autofit ? r->xs : 1.0f);
     pr->ys = P_flt(p, k, "projscale", 1, 1) * (r->autofit ? r->ys : 1.0f);
     anim_start(&pr->anim, &pr->cd->air, ac, 0, 0);
+    log_spawn("projectile", pr->cd, ac->no, pr->x, pr->y, pr->xs, pr->ys, pr->id, hits);
 }
 
 static void parent_var(Player *p, const Ctrl *k, int add)
@@ -1222,7 +1243,7 @@ static void autofit(Player *p, float cs)
 int fight_init(Fight *f, const CharData *c1, const CharData *c2)
 {
     memset(f, 0, sizeof *f);
-    f->rng = 12345; f->next_pid = 2000;
+    f->rng = 12345; f->next_pid = 2000; g_nlog = 0; g_nmissing = 0;
     f->cs = c1->coord_w > 0 ? (float)c1->coord_w / 320.0f : 1.0f;      /* character units per stage unit */
     if (f->cs < 0.25f) f->cs = 0.25f;
     if (f->cs > 8.0f) f->cs = 8.0f;
@@ -1350,7 +1371,12 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
         }
         if (!fr || fr->group < 0 || !cd->sff_ok) continue;
         const Sprite *sp = sff_find(&cd->sff, fr->group, fr->image);
-        if (!sp || !sp->px) continue;
+        if (!sp || !sp->px) {
+            int seen = 0;
+            for (int m = 0; m < g_nmissing; m++) if (g_missing[m][0] == fr->group && g_missing[m][1] == fr->image) seen = 1;
+            if (!seen && g_nmissing < 24) { g_missing[g_nmissing][0] = fr->group; g_missing[g_nmissing][1] = fr->image; g_missing[g_nmissing][2] = di[n].kind; g_nmissing++; }
+            continue;
+        }
         const uint32_t *pal = sff_palette(&cd->sff, sp);
         if (!pal) continue;
         int ax = SX(x + (float)(fc * fr->xoff) * xs), ay = SY(y + (float)fr->yoff * ys);
@@ -1417,4 +1443,14 @@ void fight_draw(const Fight *f, uint32_t *fb, int w, int h)
     gfx_text(30, h - 30, 2, 0xFF808890, "SELECT:HITBOXES  L1:RESET  L2:BACK");
 #undef SX
 #undef SY
+}
+
+void fight_report(const Fight *f, FILE *log)
+{
+    if (!log) return;
+    fprintf(log, "fight report (tick %d): overflow=%d missing_states=%d\n", f->tick, f->overflow, f->missing_state);
+    for (int i = 1; i < SC_COUNT; i++) if (f->unimpl[i]) fprintf(log, "  controller not implemented: %s x%d\n", cns_ctrl_name(i), f->unimpl[i]);
+    for (int i = 1; i < TG_COUNT; i++) if (f->untrig[i]) fprintf(log, "  trigger not implemented (answered 0): %s x%d\n", expr_trigger_name(i), f->untrig[i]);
+    for (int m = 0; m < g_nmissing; m++) fprintf(log, "  sprite %d,%d not in the SFF (drawn by kind %d)\n", g_missing[m][0], g_missing[m][1], g_missing[m][2]);
+    fflush(log);
 }

@@ -93,6 +93,7 @@ void cns_finish(StateDb *db);                                      /* sorts; cal
 void cns_free(StateDb *db);
 const StateDef *cns_state(const StateDb *db, int no);
 double cns_const(const StateDb *db, const char *name, double dflt);
+const char *cns_ctrl_name(int type);
 const Param *ctrl_param(const Ctrl *c, const char *name);
 
 #endif

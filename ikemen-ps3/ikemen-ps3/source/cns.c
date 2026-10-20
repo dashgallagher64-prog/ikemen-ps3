@@ -6,6 +6,7 @@
 #include "cns.h"
 #include "text.h"
 
+const char *cns_ctrl_name(int t);
 static const char *SC_NAMES[SC_COUNT] = {
 #define X(id, name) [id] = name,
     CONTROLLER_LIST(X)
@@ -352,3 +353,5 @@ const Param *ctrl_param(const Ctrl *c, const char *name)
     for (int i = 0; i < c->npar; i++) if (!strcmp(c->par[i].name, name)) return &c->par[i];
     return NULL;
 }
+
+const char *cns_ctrl_name(int t) { return t > 0 && t < SC_COUNT && SC_NAMES[t] ? SC_NAMES[t] : "?"; }
